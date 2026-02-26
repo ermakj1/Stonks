@@ -26,6 +26,8 @@ interface OptionEntry {
   expiration: string;
   contracts: number;
   premium_paid: number;
+  saved_price?: number;
+  target_price?: number;
   notes: string;
 }
 
@@ -42,9 +44,14 @@ function buildSystemPrompt(
   prices: { stocks: StockQuote[]; options: OptionsData[] }
 ): string {
   const priceMap = new Map(prices.stocks.map((s) => [s.ticker, s]));
-  const optionList = Object.values(holdings.options);
+  const optionPriceMap = new Map(prices.options.map((o) => [o.key, o]));
 
-  const stocksText = Object.entries(holdings.stocks).map(([ticker, s]) => {
+  const ownedStocks   = Object.entries(holdings.stocks).filter(([, s]) => s.shares > 0);
+  const watchedStocks = Object.entries(holdings.stocks).filter(([, s]) => s.shares === 0);
+  const ownedOptions   = Object.entries(holdings.options).filter(([, o]) => o.contracts > 0);
+  const watchedOptions = Object.entries(holdings.options).filter(([, o]) => o.contracts === 0);
+
+  const fmtOwnedStock = ([ticker, s]: [string, StockEntry]) => {
     const q = priceMap.get(ticker);
     const currentPrice = q?.price ?? 0;
     const pnl = (currentPrice - s.cost_basis) * s.shares;
@@ -54,20 +61,47 @@ function buildSystemPrompt(
       `    Current: $${currentPrice.toFixed(2)} (${q?.changePercent?.toFixed(2) ?? 0}% today)`,
       `    P&L: $${pnl.toFixed(2)} (${pnlPct.toFixed(1)}%)`,
       `    Target allocation: ${s.target_allocation_pct}%`,
-      `    Notes: ${s.notes}`,
-    ].join('\n');
-  });
+      s.notes ? `    Notes: ${s.notes}` : '',
+    ].filter(Boolean).join('\n');
+  };
 
-  const optionsText = optionList.map((o, i) => {
-    const od = prices.options[i];
+  const fmtWatchedStock = ([ticker, s]: [string, StockEntry]) => {
+    const q = priceMap.get(ticker);
+    const currentPrice = q?.price ?? 0;
     return [
-      `  ${o.ticker} ${o.type} $${o.strike} exp ${o.expiration} x${o.contracts} contracts`,
-      `    Premium paid: $${o.premium_paid.toFixed(2)}/share`,
-      `    Last: $${od?.lastPrice?.toFixed(2) ?? 'N/A'} | Bid/Ask: ${od?.bid?.toFixed(2) ?? 'N/A'}/${od?.ask?.toFixed(2) ?? 'N/A'}`,
-      `    IV: ${od?.impliedVolatility ? (od.impliedVolatility * 100).toFixed(1) + '%' : 'N/A'} | DTE: ${od?.daysToExpiration ?? 'N/A'} days`,
-      `    Notes: ${o.notes}`,
-    ].join('\n');
-  });
+      `  ${ticker}: watching (not owned)`,
+      `    Current: $${currentPrice.toFixed(2)} (${q?.changePercent?.toFixed(2) ?? 0}% today)`,
+      s.cost_basis > 0 ? `    Cost target / reference: $${s.cost_basis.toFixed(2)}` : '',
+      s.notes ? `    Notes: ${s.notes}` : '',
+    ].filter(Boolean).join('\n');
+  };
+
+  const fmtOwnedOption = ([key, o]: [string, OptionEntry]) => {
+    const od = optionPriceMap.get(key);
+    const gainDollar = od?.mid != null ? (od.mid - o.premium_paid) * o.contracts * 100 : null;
+    const gainPct    = gainDollar != null && o.premium_paid > 0 ? (gainDollar / (o.premium_paid * o.contracts * 100)) * 100 : null;
+    return [
+      `  ${o.ticker} ${o.type.toUpperCase()} $${o.strike} exp ${o.expiration} x${o.contracts} contracts`,
+      `    Premium paid: $${o.premium_paid.toFixed(2)}/contract`,
+      od?.mid != null
+        ? `    Current mid: $${od.mid.toFixed(2)} | Bid/Ask: $${od.bid?.toFixed(2) ?? 'N/A'}/$${od.ask?.toFixed(2) ?? 'N/A'}`
+        : '    Current mid: N/A',
+      od?.iv != null ? `    IV: ${(od.iv * 100).toFixed(1)}% | DTE: ${od.daysToExpiration} days` : `    DTE: ${od?.daysToExpiration ?? 'N/A'} days`,
+      gainDollar != null ? `    P&L: $${gainDollar.toFixed(2)} (${gainPct?.toFixed(1)}%)` : '',
+      o.notes ? `    Notes: ${o.notes}` : '',
+    ].filter(Boolean).join('\n');
+  };
+
+  const fmtWatchedOption = ([, o]: [string, OptionEntry]) => {
+    return [
+      `  ${o.ticker} ${o.type.toUpperCase()} $${o.strike} exp ${o.expiration}: watching (not owned)`,
+      o.saved_price != null ? `    Mid when added to watchlist: $${o.saved_price.toFixed(2)}` : '',
+      o.target_price != null && o.target_price > 0 ? `    Target mid price: $${o.target_price.toFixed(2)}` : '',
+      o.notes ? `    Notes: ${o.notes}` : '',
+    ].filter(Boolean).join('\n');
+  };
+
+  const section = (items: string[]) => items.length > 0 ? items.join('\n\n') : '  (none)';
 
   return `${persona.trim()}
 
@@ -76,11 +110,17 @@ ${strategy}
 
 ## Current Holdings (as of ${holdings.lastUpdated})
 
-### Stocks
-${stocksText.join('\n\n')}
+### Stocks — Owned
+${section(ownedStocks.map(fmtOwnedStock))}
 
-### Options
-${optionsText.length > 0 ? optionsText.join('\n\n') : '  (none)'}
+### Stocks — Watching
+${section(watchedStocks.map(fmtWatchedStock))}
+
+### Options — Owned
+${section(ownedOptions.map(fmtOwnedOption))}
+
+### Options — Watching
+${section(watchedOptions.map(fmtWatchedOption))}
 
 ## Instructions
 - Provide thoughtful, data-driven advice based on the user's strategy and current positions
