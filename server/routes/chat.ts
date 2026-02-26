@@ -101,6 +101,26 @@ Or for strategy:
 IMPORTANT for holdings updates: preserve the exact schema format (stocks as an object keyed by ticker, options as an object keyed by a string ID, snake_case field names). Only include ONE FILE_UPDATE block per response.`;
 }
 
+// GET /api/chat/context — returns exactly what the AI would receive
+chatRouter.get('/context', async (_req, res) => {
+  try {
+    const [personaRaw, strategyRaw, holdingsRaw] = await Promise.all([
+      readFile(SYSTEM_PROMPT_PATH, 'utf-8').catch(() => 'You are a knowledgeable stock trading assistant helping manage a personal investment portfolio.'),
+      readFile(STRATEGY_PATH, 'utf-8'),
+      readFile(HOLDINGS_PATH, 'utf-8'),
+    ]);
+
+    const holdings: Holdings = JSON.parse(holdingsRaw);
+    const prices = await getAllPrices(holdings);
+    const systemPrompt = buildSystemPrompt(personaRaw, strategyRaw, holdings, prices);
+
+    res.json({ systemPrompt, prices, holdings });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
 chatRouter.post('/', async (req, res) => {
   try {
     const { messages, provider = process.env.AI_PROVIDER ?? 'anthropic' } = req.body as {
