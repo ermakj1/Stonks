@@ -77,3 +77,97 @@ export async function getOptionMid(
 }
 
 export { parseOCC };
+
+// ── Filtered chain for AI tool use ───────────────────────────────────
+
+export interface ChainFilter {
+  type?:           'calls' | 'puts' | 'both';
+  dteMin?:         number;   // default 20
+  dteMax?:         number;   // default 90
+  otmOnly?:        boolean;  // default true
+  maxResults?:     number;   // default 25, capped at 50
+  underlyingPrice?: number;
+}
+
+export interface FilteredContract {
+  type:         'call' | 'put';
+  strike:       number;
+  expiry:       string;
+  dte:          number;
+  bid:          number;
+  ask:          number;
+  mid:          number;
+  iv:           number;
+  delta:        number;
+  volume:       number;
+  openInterest: number;
+}
+
+export async function getFilteredChain(
+  ticker: string,
+  filter: ChainFilter = {}
+): Promise<FilteredContract[]> {
+  const {
+    type        = 'both',
+    dteMin      = 20,
+    dteMax      = 90,
+    otmOnly     = true,
+    maxResults  = 25,
+    underlyingPrice,
+  } = filter;
+
+  const options = await fetchChain(ticker);
+  const now     = Date.now() / 1000;
+  const results: FilteredContract[] = [];
+
+  for (const opt of options) {
+    const parsed = parseOCC(opt.option);
+    if (!parsed) continue;
+
+    // Type filter
+    if (type === 'calls' && parsed.type !== 'call') continue;
+    if (type === 'puts'  && parsed.type !== 'put')  continue;
+
+    // DTE filter
+    const expiryTs = new Date(parsed.expiry + 'T12:00:00Z').getTime() / 1000;
+    const dte      = (expiryTs - now) / 86400;
+    if (dte < dteMin || dte > dteMax) continue;
+
+    // OTM filter
+    if (otmOnly && underlyingPrice != null) {
+      const isOTM = parsed.type === 'call'
+        ? parsed.strike > underlyingPrice
+        : parsed.strike < underlyingPrice;
+      if (!isOTM) continue;
+    }
+
+    // Require non-zero mid (some stale contracts have no market)
+    const mid = (opt.bid + opt.ask) / 2;
+    if (mid <= 0) continue;
+
+    results.push({
+      type:         parsed.type,
+      strike:       parsed.strike,
+      expiry:       parsed.expiry,
+      dte:          Math.round(dte),
+      bid:          opt.bid,
+      ask:          opt.ask,
+      mid,
+      iv:           opt.iv           ?? 0,
+      delta:        opt.delta        ?? 0,
+      volume:       opt.volume       ?? 0,
+      openInterest: opt.open_interest ?? 0,
+    });
+  }
+
+  // Sort: nearest expiry first, then closest strike to underlying
+  results.sort((a, b) => {
+    if (a.dte !== b.dte) return a.dte - b.dte;
+    if (underlyingPrice != null) {
+      return Math.abs(a.strike - underlyingPrice) - Math.abs(b.strike - underlyingPrice);
+    }
+    return a.strike - b.strike;
+  });
+
+  return results.slice(0, Math.min(maxResults, 50));
+}

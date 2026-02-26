@@ -100,8 +100,21 @@ export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrate
           if (data === '[DONE]') break;
 
           try {
-            const parsed = JSON.parse(data) as { text: string };
-            fullText += parsed.text;
+            const parsed = JSON.parse(data) as {
+              text?: string;
+              tool_call?: { name: string; input: Record<string, unknown> };
+            };
+
+            if (parsed.text) {
+              fullText += parsed.text;
+            } else if (parsed.tool_call) {
+              const inp = parsed.tool_call.input;
+              const ticker  = inp.ticker  ? String(inp.ticker).toUpperCase() : '';
+              const type    = inp.type    ? String(inp.type)    : 'options';
+              const dteMin  = inp.dte_min != null ? String(inp.dte_min)  : '20';
+              const dteMax  = inp.dte_max != null ? String(inp.dte_max)  : '90';
+              fullText += `\n> 🔍 *Fetching ${ticker} ${type} (DTE ${dteMin}–${dteMax})...*\n\n`;
+            }
 
             setMessages((prev) =>
               prev.map((m) =>

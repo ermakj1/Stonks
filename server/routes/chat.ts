@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { readFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { streamChat, type AIProvider, type ChatMessage } from '../services/ai.js';
+import { streamChat, type AIProvider, type ChatMessage, type ToolExecutor } from '../services/ai.js';
 import { getAllPrices, type StockQuote, type OptionsData } from '../services/yahoo.js';
+import { getFilteredChain } from '../services/cboe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOLDINGS_PATH      = path.resolve(__dirname, '../../data/holdings.json');
@@ -141,6 +142,55 @@ Or for strategy:
 IMPORTANT for holdings updates: preserve the exact schema format (stocks as an object keyed by ticker, options as an object keyed by a string ID, snake_case field names). Only include ONE FILE_UPDATE block per response.`;
 }
 
+// ── Tool executor ─────────────────────────────────────────────────────
+
+function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
+  return async (name, input) => {
+    if (name !== 'get_option_chain') return `Unknown tool: ${name}`;
+
+    const ticker = String(input.ticker ?? '').toUpperCase();
+    if (!ticker) return 'Error: ticker is required';
+
+    const type       = String(input.type ?? 'both') as 'calls' | 'puts' | 'both';
+    const dteMin     = Number(input.dte_min     ?? 20);
+    const dteMax     = Number(input.dte_max     ?? 90);
+    const otmOnly    = input.otm_only !== false;
+    const maxResults = Math.min(Number(input.max_results ?? 25), 50);
+
+    const underlyingPrice = priceMap.get(ticker)?.price;
+
+    try {
+      const contracts = await getFilteredChain(ticker, {
+        type, dteMin, dteMax, otmOnly, maxResults, underlyingPrice,
+      });
+
+      if (contracts.length === 0) {
+        return `No ${ticker} options matched (${type}, DTE ${dteMin}–${dteMax}, OTM: ${otmOnly}). Try widening filters or check the ticker.`;
+      }
+
+      const p = (s: string, n: number) => s.padStart(n);
+      const header = [
+        `${ticker} options  |  underlying: $${underlyingPrice?.toFixed(2) ?? 'N/A'}`,
+        `Filters: ${type}, DTE ${dteMin}–${dteMax} days, OTM only: ${otmOnly}  |  ${contracts.length} contracts`,
+        '',
+        `${'Expiry'.padEnd(12)} ${'DTE'.padStart(3)}  ${'Type'.padEnd(4)}  ${'Strike'.padStart(7)}  ${'Bid'.padStart(6)}  ${'Ask'.padStart(6)}  ${'Mid'.padStart(6)}  ${'IV%'.padStart(5)}  ${'Delta'.padStart(6)}  ${'Vol'.padStart(7)}  ${'OI'.padStart(7)}`,
+        '─'.repeat(90),
+      ].join('\n');
+
+      const rows = contracts.map(c =>
+        `${c.expiry.padEnd(12)} ${p(String(c.dte), 3)}  ${c.type.toUpperCase().padEnd(4)}  ${p('$' + c.strike, 7)}` +
+        `  ${p('$' + c.bid.toFixed(2), 6)}  ${p('$' + c.ask.toFixed(2), 6)}  ${p('$' + c.mid.toFixed(2), 6)}` +
+        `  ${p((c.iv * 100).toFixed(1) + '%', 5)}  ${p(c.delta.toFixed(3), 6)}` +
+        `  ${p((c.volume ?? 0).toLocaleString(), 7)}  ${p((c.openInterest ?? 0).toLocaleString(), 7)}`
+      );
+
+      return `${header}\n${rows.join('\n')}`;
+    } catch (err) {
+      return `Error fetching ${ticker} options: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  };
+}
+
 // GET /api/chat/context — returns exactly what the AI would receive
 chatRouter.get('/context', async (_req, res) => {
   try {
@@ -181,9 +231,11 @@ chatRouter.post('/', async (req, res) => {
 
     const holdings: Holdings = JSON.parse(holdingsRaw);
     const prices = await getAllPrices(holdings);
+    const priceMap = new Map(prices.stocks.map(s => [s.ticker, s]));
     const systemPrompt = buildSystemPrompt(personaRaw, strategyRaw, holdings, prices);
+    const toolExecutor = makeToolExecutor(priceMap);
 
-    await streamChat(messages, systemPrompt, provider, res);
+    await streamChat(messages, systemPrompt, provider, res, toolExecutor);
   } catch (err) {
     console.error('Chat error:', err);
     if (!res.headersSent) {
