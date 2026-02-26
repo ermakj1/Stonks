@@ -1,0 +1,42 @@
+{
+  "name": "stonks",
+  "version": "1.0.0",
+  "description": "AI Stock Trading Assistant",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"tsx watch server/index.ts\" \"vite client\"",
+    "build": "tsc -p tsconfig.server.json && vite build client",
+    "start": "node dist/server/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@google/generative-ai": "^0.21.0",
+    "@tailwindcss/typography": "^0.5.19",
+    "ag-grid-community": "^35.1.0",
+    "ag-grid-react": "^35.1.0",
+    "cors": "^2.8.5",
+    "diff": "^5.2.0",
+    "dotenv": "^17.3.1",
+    "express": "^4.21.2",
+    "react-markdown": "^10.1.0",
+    "yahoo-finance2": "^2.13.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/diff": "^5.2.3",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.5",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.2",
+    "postcss": "^8.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.1"
+  }
+}

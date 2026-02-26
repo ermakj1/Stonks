@@ -1,0 +1,13 @@
+# Environment / secrets
+.env
+*.local
+
+# Personal data files (use data/*.example.* as templates)
+data/holdings.json
+data/strategy.md
+data/system_prompt.md
+
+# Dependencies & build output
+node_modules/
+dist/
+client/dist/

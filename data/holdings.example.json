@@ -1,0 +1,18 @@
+{
+  "lastUpdated": "2026-01-01",
+  "stocks": {
+    "AAPL": {
+      "shares": 10,
+      "cost_basis": 150.00,
+      "target_allocation_pct": 50,
+      "notes": "Example position — replace with your own holdings"
+    },
+    "MSFT": {
+      "shares": 5,
+      "cost_basis": 300.00,
+      "target_allocation_pct": 50,
+      "notes": ""
+    }
+  },
+  "options": {}
+}
