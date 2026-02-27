@@ -1,17 +1,13 @@
 import { Router } from 'express';
-import { readFile, writeFile } from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STRATEGY_PATH = path.resolve(__dirname, '../../data/strategy.md');
+import { getActiveAccountId, readAccount, writeAccount } from '../services/accounts.js';
 
 export const strategyRouter = Router();
 
 strategyRouter.get('/', async (_req, res) => {
   try {
-    const data = await readFile(STRATEGY_PATH, 'utf-8');
-    res.json({ content: data });
+    const id = await getActiveAccountId();
+    const account = await readAccount(id);
+    res.json({ content: account.strategy });
   } catch (err) {
     res.status(500).json({ error: 'Failed to read strategy' });
   }
@@ -24,7 +20,10 @@ strategyRouter.put('/', async (req, res) => {
       res.status(400).json({ error: 'content must be a string' });
       return;
     }
-    await writeFile(STRATEGY_PATH, content, 'utf-8');
+    const id = await getActiveAccountId();
+    const account = await readAccount(id);
+    account.strategy = content;
+    await writeAccount(account);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to write strategy' });

@@ -1,5 +1,5 @@
-import React from 'react';
-import type { AIProvider } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import type { AIProvider, AccountMeta } from '../types';
 
 interface Props {
   provider: AIProvider;
@@ -7,12 +7,62 @@ interface Props {
   onRefreshPrices: () => void;
   pricesLoading: boolean;
   lastRefreshed: Date | null;
+  accounts: AccountMeta[];
+  activeAccount: AccountMeta | null;
+  onSwitchAccount: (id: string) => void;
+  onCreateAccount: (name: string) => void;
 }
 
-export function SettingsBar({ provider, onProviderChange, onRefreshPrices, pricesLoading, lastRefreshed }: Props) {
+export function SettingsBar({
+  provider,
+  onProviderChange,
+  onRefreshPrices,
+  pricesLoading,
+  lastRefreshed,
+  accounts,
+  activeAccount,
+  onSwitchAccount,
+  onCreateAccount,
+}: Props) {
   const timeLabel = lastRefreshed
     ? lastRefreshed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })
     : null;
+
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [showNewInput, setShowNewInput] = useState(false);
+  const [newName, setNewName] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+        setShowNewInput(false);
+        setNewName('');
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [dropdownOpen]);
+
+  function handleSwitchAccount(id: string) {
+    onSwitchAccount(id);
+    setDropdownOpen(false);
+    setShowNewInput(false);
+    setNewName('');
+  }
+
+  function handleCreateAccount(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    onCreateAccount(trimmed);
+    setShowNewInput(false);
+    setNewName('');
+    setDropdownOpen(false);
+  }
 
   return (
     <div className="flex items-center justify-between px-5 py-2.5 bg-slate-900 border-b border-slate-800 flex-shrink-0">
@@ -29,6 +79,76 @@ export function SettingsBar({ provider, onProviderChange, onRefreshPrices, price
 
       {/* Controls */}
       <div className="flex items-center gap-4">
+        {/* Account switcher */}
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => {
+              setDropdownOpen(v => !v);
+              setShowNewInput(false);
+              setNewName('');
+            }}
+            className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-200 hover:border-slate-500 transition-colors"
+          >
+            <span>{activeAccount?.name ?? 'Select Account'}</span>
+            <span className="text-slate-400 text-[10px]">▾</span>
+          </button>
+
+          {dropdownOpen && (
+            <div className="absolute top-full mt-1 left-0 min-w-52 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 overflow-hidden">
+              {accounts.map(acct => (
+                <button
+                  key={acct.id}
+                  onClick={() => handleSwitchAccount(acct.id)}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-slate-700 transition-colors flex items-center gap-2"
+                >
+                  <span className={`w-3 flex-shrink-0 ${activeAccount?.id === acct.id ? 'text-emerald-400' : 'text-transparent'}`}>✓</span>
+                  <span className="text-slate-200 flex-1">{acct.name}</span>
+                  {acct.id === 'demo' && (
+                    <span className="text-slate-500 text-[10px]">(demo)</span>
+                  )}
+                </button>
+              ))}
+
+              <div className="border-t border-slate-700">
+                {showNewInput ? (
+                  <form onSubmit={handleCreateAccount}>
+                    <div className="px-3 py-2 flex items-center gap-1">
+                      <input
+                        autoFocus
+                        value={newName}
+                        onChange={e => setNewName(e.target.value)}
+                        placeholder="Account name"
+                        className="flex-1 min-w-0 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="submit"
+                        className="text-emerald-400 text-xs font-semibold px-2 hover:text-emerald-300 flex-shrink-0"
+                      >
+                        OK
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setShowNewInput(false); setNewName(''); }}
+                        className="text-slate-500 text-xs px-1 hover:text-slate-300 flex-shrink-0"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    onClick={() => setShowNewInput(true)}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors flex items-center gap-2"
+                  >
+                    <span className="w-3 flex-shrink-0">＋</span>
+                    <span>New Account</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Model selector */}
         <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${provider === 'none' ? 'bg-slate-600' : 'bg-emerald-400 animate-pulse'}`} />

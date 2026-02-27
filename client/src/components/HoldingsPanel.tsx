@@ -48,6 +48,20 @@ function dteFromExpiry(expiry: string): number {
 
 type StockCtx = { openOptions: (t: string) => void; deleteStock: (t: string) => void };
 
+const FIDELITY_URL = (ticker: string) =>
+  `https://digital.fidelity.com/prgw/digital/research/quote/dashboard/chart?symbol=${ticker}`;
+
+const FIDELITY_OPTIONS_URL = (ticker: string) =>
+  `https://digital.fidelity.com/ftgw/digital/options-research/option-chain?symbol=${ticker}&oarchain=true`;
+
+const ExternalLinkIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    <polyline points="15 3 21 3 21 9" />
+    <line x1="10" y1="14" x2="21" y2="3" />
+  </svg>
+);
+
 function TickerCell(p: { value: string; data: StockRow; context: StockCtx }) {
   if (p.data.isSummary) {
     return <span style={{ fontWeight: 700, color: '#94a3b8', fontSize: 12, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Portfolio Total</span>;
@@ -73,6 +87,14 @@ function TickerCell(p: { value: string; data: StockRow; context: StockCtx }) {
           <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" />
         </svg>
       </button>
+      {/* Fidelity link */}
+      <a href={FIDELITY_URL(p.value)} target="_blank" rel="noopener noreferrer" title="Research on Fidelity"
+        onClick={e => e.stopPropagation()}
+        style={{ ...btnBase, color: '#475569', textDecoration: 'none' }}
+        onMouseEnter={e => (e.currentTarget.style.color = '#818cf8')}
+        onMouseLeave={e => (e.currentTarget.style.color = '#475569')}>
+        <ExternalLinkIcon />
+      </a>
       {/* delete icon */}
       <button onClick={e => { e.stopPropagation(); p.context.deleteStock(p.value); }} title="Remove stock"
         style={{ ...btnBase, color: '#334155' }}
@@ -82,6 +104,25 @@ function TickerCell(p: { value: string; data: StockRow; context: StockCtx }) {
           <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
+    </span>
+  );
+}
+
+function OptionTickerCell(p: { value: string }) {
+  const btnBase: React.CSSProperties = {
+    background: 'none', border: 'none', padding: '2px 3px', cursor: 'pointer',
+    borderRadius: 4, lineHeight: 1, display: 'flex', alignItems: 'center', textDecoration: 'none',
+  };
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+      <span style={{ fontWeight: 700 }}>{p.value}</span>
+      <a href={FIDELITY_OPTIONS_URL(p.value)} target="_blank" rel="noopener noreferrer" title="Option chain on Fidelity"
+        onClick={e => e.stopPropagation()}
+        style={{ ...btnBase, color: '#475569', textDecoration: 'none' }}
+        onMouseEnter={e => (e.currentTarget.style.color = '#818cf8')}
+        onMouseLeave={e => (e.currentTarget.style.color = '#475569')}>
+        <ExternalLinkIcon />
+      </a>
     </span>
   );
 }
@@ -422,7 +463,7 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
   const ec = { cursor: 'text' };
 
   const stockCols = useMemo<ColDef<StockRow>[]>(() => [
-    { field: 'ticker',       headerName: 'Symbol',     width: 145, pinned: 'left', cellRenderer: TickerCell },
+    { field: 'ticker',       headerName: 'Symbol',     width: 160, pinned: 'left', cellRenderer: TickerCell },
     { field: 'shares',       headerName: 'Shares',     width: 95,  editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec, valueFormatter: p => p.data?.isSummary ? '' : p.value?.toLocaleString(), valueParser: p => Number(p.newValue), onCellValueChanged },
     { field: 'costBasis',    headerName: 'Cost/Share', width: 105, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec, valueFormatter: p => p.data?.isSummary ? '' : `$${fmt2(p.value)}`, valueParser: p => Number(p.newValue), onCellValueChanged },
     { field: 'price',        headerName: 'Last Price', width: 105, cellRenderer: PriceCell },
@@ -436,7 +477,7 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
   ], [onCellValueChanged]);
 
   const ownedOptionCols = useMemo<ColDef<OwnedOptionRow>[]>(() => [
-    { field: 'ticker',           headerName: 'Symbol',  width: 90,  pinned: 'left', cellStyle: { fontWeight: 'bold' } },
+    { field: 'ticker',           headerName: 'Symbol',  width: 105, pinned: 'left', cellRenderer: OptionTickerCell },
     { field: 'type',             headerName: 'Type',    width: 80,  cellRenderer: OptionTypeCell },
     { field: 'strike',           headerName: 'Strike',  width: 85,  valueFormatter: p => `$${p.value}` },
     { field: 'expiration',       headerName: 'Expiry',  width: 110 },
@@ -451,7 +492,7 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
   ], []);
 
   const watchedOptionCols = useMemo<ColDef<WatchedOptionRow>[]>(() => [
-    { field: 'ticker',          headerName: 'Symbol',       width: 90,  pinned: 'left', cellStyle: { fontWeight: 'bold', color: '#64748b' } },
+    { field: 'ticker',          headerName: 'Symbol',       width: 105, pinned: 'left', cellRenderer: OptionTickerCell },
     { field: 'type',            headerName: 'Type',         width: 80,  cellRenderer: OptionTypeCell },
     { field: 'strike',          headerName: 'Strike',       width: 85,  valueFormatter: p => `$${p.value}` },
     { field: 'expiration',      headerName: 'Expiry',       width: 110 },

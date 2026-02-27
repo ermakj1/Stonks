@@ -5,10 +5,9 @@ import { fileURLToPath } from 'url';
 import { streamChat, type AIProvider, type ChatMessage, type ToolExecutor } from '../services/ai.js';
 import { getAllPrices, type StockQuote, type OptionsData } from '../services/yahoo.js';
 import { getFilteredChain } from '../services/cboe.js';
+import { getActiveAccountId, readAccount } from '../services/accounts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const HOLDINGS_PATH      = path.resolve(__dirname, '../../data/holdings.json');
-const STRATEGY_PATH      = path.resolve(__dirname, '../../data/strategy.md');
 const SYSTEM_PROMPT_PATH = path.resolve(__dirname, '../../data/system_prompt.md');
 
 export const chatRouter = Router();
@@ -211,15 +210,15 @@ function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
 // GET /api/chat/context — returns exactly what the AI would receive
 chatRouter.get('/context', async (_req, res) => {
   try {
-    const [personaRaw, strategyRaw, holdingsRaw] = await Promise.all([
+    const [personaRaw, accountId] = await Promise.all([
       readFile(SYSTEM_PROMPT_PATH, 'utf-8').catch(() => 'You are a knowledgeable stock trading assistant helping manage a personal investment portfolio.'),
-      readFile(STRATEGY_PATH, 'utf-8'),
-      readFile(HOLDINGS_PATH, 'utf-8'),
+      getActiveAccountId(),
     ]);
 
-    const holdings: Holdings = JSON.parse(holdingsRaw);
+    const account = await readAccount(accountId);
+    const holdings = account.holdings as Holdings;
     const prices = await getAllPrices(holdings);
-    const systemPrompt = buildSystemPrompt(personaRaw, strategyRaw, holdings, prices);
+    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices);
 
     res.json({ systemPrompt, prices, holdings });
   } catch (err) {
@@ -240,16 +239,16 @@ chatRouter.post('/', async (req, res) => {
       return;
     }
 
-    const [personaRaw, strategyRaw, holdingsRaw] = await Promise.all([
+    const [personaRaw, accountId] = await Promise.all([
       readFile(SYSTEM_PROMPT_PATH, 'utf-8').catch(() => 'You are a knowledgeable stock trading assistant helping manage a personal investment portfolio.'),
-      readFile(STRATEGY_PATH, 'utf-8'),
-      readFile(HOLDINGS_PATH, 'utf-8'),
+      getActiveAccountId(),
     ]);
 
-    const holdings: Holdings = JSON.parse(holdingsRaw);
+    const account = await readAccount(accountId);
+    const holdings = account.holdings as Holdings;
     const prices = await getAllPrices(holdings);
     const priceMap = new Map(prices.stocks.map(s => [s.ticker, s]));
-    const systemPrompt = buildSystemPrompt(personaRaw, strategyRaw, holdings, prices);
+    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices);
     const toolExecutor = makeToolExecutor(priceMap);
 
     await streamChat(messages, systemPrompt, provider, res, toolExecutor);

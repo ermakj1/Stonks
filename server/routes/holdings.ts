@@ -1,18 +1,14 @@
 import { Router } from 'express';
-import { readFile, writeFile } from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { getActiveAccountId, readAccount, writeAccount } from '../services/accounts.js';
 import { getOptionMid } from '../services/cboe.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const HOLDINGS_PATH = path.resolve(__dirname, '../../data/holdings.json');
 
 export const holdingsRouter = Router();
 
 holdingsRouter.get('/', async (_req, res) => {
   try {
-    const data = await readFile(HOLDINGS_PATH, 'utf-8');
-    res.json(JSON.parse(data));
+    const id = await getActiveAccountId();
+    const account = await readAccount(id);
+    res.json(account.holdings);
   } catch (err) {
     res.status(500).json({ error: 'Failed to read holdings' });
   }
@@ -20,9 +16,12 @@ holdingsRouter.get('/', async (_req, res) => {
 
 holdingsRouter.put('/', async (req, res) => {
   try {
+    const id = await getActiveAccountId();
+    const account = await readAccount(id);
     const content = req.body;
     content.lastUpdated = new Date().toISOString().split('T')[0];
-    await writeFile(HOLDINGS_PATH, JSON.stringify(content, null, 2), 'utf-8');
+    account.holdings = content;
+    await writeAccount(account);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to write holdings' });
@@ -50,8 +49,13 @@ holdingsRouter.post('/watch-option', async (req, res) => {
     // Fetch current mid price from CBOE (best-effort)
     const mid = await getOptionMid(ticker.toUpperCase(), type, strike, expiration);
 
-    const data = await readFile(HOLDINGS_PATH, 'utf-8');
-    const holdings = JSON.parse(data);
+    const id = await getActiveAccountId();
+    const account = await readAccount(id);
+    const holdings = account.holdings as {
+      stocks: Record<string, unknown>;
+      options: Record<string, unknown>;
+      lastUpdated: string;
+    };
 
     holdings.options[occKey] = {
       ticker: ticker.toUpperCase(),
@@ -66,7 +70,8 @@ holdingsRouter.post('/watch-option', async (req, res) => {
     };
     holdings.lastUpdated = new Date().toISOString().split('T')[0];
 
-    await writeFile(HOLDINGS_PATH, JSON.stringify(holdings, null, 2), 'utf-8');
+    account.holdings = holdings;
+    await writeAccount(account);
     res.json({ success: true, occKey, mid: mid?.mid ?? null });
   } catch (err) {
     res.status(500).json({ error: 'Failed to add option to watchlist' });

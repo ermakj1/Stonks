@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AIProvider, Holdings, PricesResponse } from './types';
+import type { AIProvider, Holdings, PricesResponse, AccountMeta } from './types';
 import { SettingsBar } from './components/SettingsBar';
 import { HoldingsPanel } from './components/HoldingsPanel';
 import { Chat } from './components/Chat';
@@ -17,6 +17,10 @@ export default function App() {
   const [prices, setPrices] = useState<PricesResponse | null>(null);
   const [pricesLoading, setPricesLoading] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+
+  // Account state
+  const [accounts, setAccounts] = useState<AccountMeta[]>([]);
+  const [activeAccount, setActiveAccount] = useState<AccountMeta | null>(null);
 
   // Resizable split pane
   const [splitPct, setSplitPct] = useState(62); // holdings gets 62% by default
@@ -83,12 +87,28 @@ export default function App() {
     }
   }, []);
 
+  const fetchAccounts = useCallback(async () => {
+    try {
+      const [listRes, activeRes] = await Promise.all([
+        fetch('/api/accounts'),
+        fetch('/api/accounts/active'),
+      ]);
+      const list = await listRes.json() as AccountMeta[];
+      const { id, account } = await activeRes.json() as { id: string; account: { id: string; name: string } };
+      setAccounts(list);
+      setActiveAccount({ id, name: account.name });
+    } catch (err) {
+      console.error('Failed to fetch accounts:', err);
+    }
+  }, []);
+
   useEffect(() => {
+    fetchAccounts();
     fetchHoldings();
     fetchStrategy();
     fetchSystemPrompt();
     fetchPrices();
-  }, [fetchHoldings, fetchStrategy, fetchSystemPrompt, fetchPrices]);
+  }, [fetchAccounts, fetchHoldings, fetchStrategy, fetchSystemPrompt, fetchPrices]);
 
   const handleHoldingsUpdated = useCallback(async () => {
     await fetchHoldings();
@@ -103,6 +123,37 @@ export default function App() {
     await fetchSystemPrompt();
   }, [fetchSystemPrompt]);
 
+  const switchAccount = useCallback(async (id: string) => {
+    try {
+      const res = await fetch('/api/accounts/active', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const { account } = await res.json() as { id: string; account: { id: string; name: string } };
+      setActiveAccount({ id, name: account.name });
+      // Re-fetch all account-specific data
+      await Promise.all([fetchHoldings(), fetchStrategy(), fetchPrices()]);
+    } catch (err) {
+      console.error('Failed to switch account:', err);
+    }
+  }, [fetchHoldings, fetchStrategy, fetchPrices]);
+
+  const createAccount = useCallback(async (name: string) => {
+    try {
+      const res = await fetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const newAccount = await res.json() as { id: string; name: string };
+      await fetchAccounts();
+      await switchAccount(newAccount.id);
+    } catch (err) {
+      console.error('Failed to create account:', err);
+    }
+  }, [fetchAccounts, switchAccount]);
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-slate-950">
       <SettingsBar
@@ -111,6 +162,10 @@ export default function App() {
         onRefreshPrices={fetchPrices}
         pricesLoading={pricesLoading}
         lastRefreshed={lastRefreshed}
+        accounts={accounts}
+        activeAccount={activeAccount}
+        onSwitchAccount={switchAccount}
+        onCreateAccount={createAccount}
       />
 
       <div ref={containerRef} className="flex flex-1 overflow-hidden">

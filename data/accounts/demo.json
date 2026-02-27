@@ -1,0 +1,50 @@
+{
+  "id": "demo",
+  "name": "Demo Portfolio",
+  "holdings": {
+    "lastUpdated": "2026-02-27",
+    "stocks": {
+      "AAPL": {
+        "shares": 50,
+        "cost_basis": 150,
+        "target_allocation_pct": 35,
+        "notes": "Core tech position"
+      },
+      "GOOGL": {
+        "shares": 20,
+        "cost_basis": 140,
+        "target_allocation_pct": 30,
+        "notes": "AI and search exposure"
+      },
+      "MSFT": {
+        "shares": 0,
+        "cost_basis": 0,
+        "target_allocation_pct": 0,
+        "notes": "Watching for entry"
+      }
+    },
+    "options": {
+      "AAPL260619C00200000": {
+        "ticker": "AAPL",
+        "type": "call",
+        "strike": 200,
+        "expiration": "2026-06-19",
+        "contracts": 2,
+        "premium_paid": 5.5,
+        "notes": "Speculative upside play"
+      },
+      "GOOGL260320C00180000": {
+        "ticker": "GOOGL",
+        "type": "call",
+        "strike": 180,
+        "expiration": "2026-03-20",
+        "contracts": 0,
+        "premium_paid": 0,
+        "saved_price": 3.2,
+        "target_price": 6,
+        "notes": "Watching for breakout above resistance"
+      }
+    }
+  },
+  "strategy": "# Demo Trading Strategy\n\n## Goals\n- Demonstrate the Stonks app with sample data\n- Long-term growth in tech sector\n\n## Risk Tolerance\n- Medium: comfortable with moderate volatility\n\n## Rules\n- This is a read-only demo account\n- Switch to \"My Portfolio\" to manage your real holdings\n"
+}

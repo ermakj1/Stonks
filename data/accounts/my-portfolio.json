@@ -1,0 +1,88 @@
+{
+  "id": "my-portfolio",
+  "name": "My Portfolio",
+  "holdings": {
+    "stocks": {
+      "MSFT": {
+        "shares": 5501,
+        "cost_basis": 51.35,
+        "current_price": 0,
+        "current_change_pct": 0,
+        "target_allocation_pct": 40,
+        "notes": "Cloud / AI exposure; long-term hold"
+      },
+      "NVDA": {
+        "shares": 0,
+        "cost_basis": 500,
+        "current_price": 0,
+        "current_change_pct": 0,
+        "target_allocation_pct": 0,
+        "notes": "AI infrastructure play"
+      },
+      "TSLA": {
+        "shares": 200,
+        "cost_basis": 211,
+        "target_allocation_pct": 0,
+        "notes": "Mila counted a bunch of Tesla cars on the way to soccer practice once"
+      },
+      "QQQI": {
+        "shares": 1945,
+        "cost_basis": 54,
+        "target_allocation_pct": 20,
+        "notes": ""
+      },
+      "FXAIX": {
+        "shares": 1710,
+        "cost_basis": 194,
+        "target_allocation_pct": 40,
+        "notes": ""
+      },
+      "FBTC": {
+        "shares": 653,
+        "cost_basis": 69,
+        "target_allocation_pct": 5,
+        "notes": ""
+      }
+    },
+    "options": {
+      "AAPL_CALL_240_2026-06-19": {
+        "ticker": "AAPL",
+        "type": "CALL",
+        "strike": 240,
+        "expiration": "2026-06-19",
+        "contracts": 2,
+        "premium_paid": 5.5,
+        "current_last": null,
+        "bid": null,
+        "ask": null,
+        "iv": null,
+        "dte": 113,
+        "notes": "Speculative upside play"
+      },
+      "MSFT260417C00430000": {
+        "ticker": "MSFT",
+        "type": "call",
+        "strike": 430,
+        "expiration": "2026-04-17",
+        "contracts": 0,
+        "premium_paid": 0,
+        "saved_price": 6.65,
+        "target_price": 10,
+        "notes": ""
+      },
+      "TSLA260320C00430000": {
+        "ticker": "TSLA",
+        "type": "call",
+        "strike": 430,
+        "expiration": "2026-03-20",
+        "contracts": 0,
+        "premium_paid": 0,
+        "saved_price": 7.55,
+        "target_price": 0,
+        "notes": "Covered call on 0%-target TSLA position. 5.3% OTM, delta 0.32, high IV pays well. If assigned at $437.50 effective, cleans up an unintended position."
+      }
+    },
+    "lastUpdated": "2026-02-27"
+  },
+  "strategy": "# Trading Strategy\n\n## Goals\n- Build long-term wealth through a diversified portfolio of high-quality technology stocks\n- Maintain ~60% in core blue-chip tech (AAPL, MSFT, GOOGL) for stability\n- Allocate ~30% to high-growth AI/semiconductor plays (NVDA, AMD, TSM)\n- Reserve ~10% for speculative options plays with defined risk\n\n## Risk Tolerance\n- Medium-high: comfortable holding through 20-30% drawdowns\n- Use options only for defined-risk strategies (long calls/puts, no naked shorts)\n- Maximum single-position size: 25% of portfolio\n\n## Rebalancing Rules\n- Rebalance quarterly or when any position drifts >5% from target allocation\n- Take partial profits when a position gains >50% from cost basis\n- Cut losses if fundamentals deteriorate (not just price action)\n\n## Options Strategy\n- Buy calls only on stocks I'd be happy owning at the strike price\n- Keep options exposure under 5% of total portfolio value\n- Close options with >50% gain or when IV spikes (sell into fear)\n\n## Current Focus\n- Overweight AI/semiconductor sector until end of 2026\n- Watch for rotation opportunities into undervalued sectors\n- Keep cash reserve of at least 5% for opportunistic buys\n"
+}

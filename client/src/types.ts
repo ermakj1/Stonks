@@ -1,5 +1,7 @@
 export type AIProvider = 'anthropic' | 'gemini' | 'none';
 
+export interface AccountMeta { id: string; name: string; }
+
 export interface StockEntry {
   shares: number;
   cost_basis: number;
