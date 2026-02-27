@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message, AIProvider, FileUpdate, Holdings } from '../types';
+import type { Message, AIProvider, FileUpdate, Holdings, OptionSuggestion } from '../types';
 import { ChatMessage } from './ChatMessage';
 import { FileDiffModal } from './FileDiffModal';
 
@@ -12,6 +12,7 @@ interface Props {
 }
 
 const FILE_UPDATE_RE = /<<<FILE_UPDATE>>>([\s\S]*?)<<<END_FILE_UPDATE>>>/;
+const OPTION_SUGGESTION_RE = /<<<OPTION_SUGGESTION>>>([\s\S]*?)<<<END_OPTION_SUGGESTION>>>/g;
 
 function extractFileUpdate(text: string): { clean: string; update: FileUpdate | null } {
   const match = FILE_UPDATE_RE.exec(text);
@@ -24,6 +25,15 @@ function extractFileUpdate(text: string): { clean: string; update: FileUpdate | 
   } catch {
     return { clean: text, update: null };
   }
+}
+
+function extractOptionSuggestions(text: string): { clean: string; suggestions: OptionSuggestion[] } {
+  const suggestions: OptionSuggestion[] = [];
+  const clean = text.replace(OPTION_SUGGESTION_RE, (_, json) => {
+    try { suggestions.push(JSON.parse(json.trim()) as OptionSuggestion); } catch {}
+    return '';
+  }).trim();
+  return { clean, suggestions };
 }
 
 export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrategyUpdated }: Props) {
@@ -116,10 +126,12 @@ export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrate
               fullText += `\n> 🔍 *Fetching ${ticker} ${type} (DTE ${dteMin}–${dteMax})...*\n\n`;
             }
 
+            // During streaming, hide any partial/complete suggestion blocks
+            const displayText = fullText.replace(/<<<OPTION_SUGGESTION>>>[\s\S]*$/s, '').trim();
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
-                  ? { ...m, content: fullText, streaming: true }
+                  ? { ...m, content: displayText, streaming: true }
                   : m
               )
             );
@@ -129,13 +141,19 @@ export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrate
         }
       }
 
-      // Extract file updates from the final text
-      const { clean, update } = extractFileUpdate(fullText);
+      // Extract file updates and option suggestions from the final text
+      const { clean: afterFileUpdate, update } = extractFileUpdate(fullText);
+      const { clean, suggestions } = extractOptionSuggestions(afterFileUpdate);
 
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, content: clean, streaming: false }
+            ? {
+                ...m,
+                content: clean,
+                streaming: false,
+                optionSuggestions: suggestions.length > 0 ? suggestions : undefined,
+              }
             : m
         )
       );
@@ -207,6 +225,15 @@ export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrate
     setPendingUpdate(null);
   };
 
+  const handleWatchOption = useCallback(async (suggestion: OptionSuggestion) => {
+    await fetch('/api/holdings/watch-option', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(suggestion),
+    });
+    onHoldingsUpdated();
+  }, [onHoldingsUpdated]);
+
   const handleReject = () => {
     setMessages((prev) => [
       ...prev,
@@ -242,7 +269,7 @@ export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrate
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 pt-4 pb-2">
         {messages.map((msg) => (
-          <ChatMessage key={msg.id} message={msg} />
+          <ChatMessage key={msg.id} message={msg} onWatchOption={handleWatchOption} />
         ))}
         <div ref={bottomRef} />
       </div>

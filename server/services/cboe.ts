@@ -78,6 +78,68 @@ export async function getOptionMid(
 
 export { parseOCC };
 
+// ── IV30 calculation ──────────────────────────────────────────────────
+
+/**
+ * Compute a 30-DTE implied volatility estimate by:
+ * 1. For each expiry, find the ATM call and put (closest strike to underlying).
+ * 2. Average their IVs to get that expiry's IV.
+ * 3. Linearly interpolate the term structure at 30 DTE.
+ * Returns a decimal (e.g. 0.32 = 32%), or null if insufficient data.
+ */
+export function calcIV30(options: RawOption[], underlyingPrice: number): number | null {
+  type ExpiryBucket = { dte: number; calls: RawOption[]; puts: RawOption[] };
+  const byExpiry = new Map<string, ExpiryBucket>();
+
+  for (const opt of options) {
+    const p = parseOCC(opt.option);
+    if (!p || opt.iv <= 0) continue;
+    if (!byExpiry.has(p.expiry)) {
+      const dte = (new Date(p.expiry + 'T12:00:00Z').getTime() - Date.now()) / 86_400_000;
+      byExpiry.set(p.expiry, { dte, calls: [], puts: [] });
+    }
+    const bucket = byExpiry.get(p.expiry)!;
+    (p.type === 'call' ? bucket.calls : bucket.puts).push(opt);
+  }
+
+  const termStructure: { dte: number; iv: number }[] = [];
+
+  for (const bucket of byExpiry.values()) {
+    if (bucket.dte < 5) continue; // skip pin-risk expiries
+
+    const atmOf = (opts: RawOption[]) =>
+      opts.reduce<RawOption | null>((best, o) => {
+        const p = parseOCC(o.option);
+        if (!p || o.iv <= 0) return best;
+        if (!best) return o;
+        const bp = parseOCC(best.option)!;
+        return Math.abs(p.strike - underlyingPrice) < Math.abs(bp.strike - underlyingPrice) ? o : best;
+      }, null);
+
+    const ivs = [atmOf(bucket.calls)?.iv, atmOf(bucket.puts)?.iv]
+      .filter((v): v is number => v != null && v > 0);
+    if (ivs.length === 0) continue;
+
+    termStructure.push({ dte: bucket.dte, iv: ivs.reduce((s, v) => s + v, 0) / ivs.length });
+  }
+
+  if (termStructure.length === 0) return null;
+  termStructure.sort((a, b) => a.dte - b.dte);
+
+  const TARGET = 30;
+  const exact = termStructure.find(t => Math.abs(t.dte - TARGET) < 1);
+  if (exact) return exact.iv;
+
+  const below = termStructure.filter(t => t.dte < TARGET);
+  const above = termStructure.filter(t => t.dte > TARGET);
+  if (below.length === 0) return above[0].iv;
+  if (above.length === 0) return below[below.length - 1].iv;
+
+  const t1 = below[below.length - 1];
+  const t2 = above[0];
+  return t1.iv + ((TARGET - t1.dte) / (t2.dte - t1.dte)) * (t2.iv - t1.iv);
+}
+
 // ── Filtered chain for AI tool use ───────────────────────────────────
 
 export interface ChainFilter {

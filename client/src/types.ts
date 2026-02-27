@@ -58,9 +58,23 @@ export interface OptionsData {
   daysToExpiration: number;
 }
 
+export interface VolatilityData {
+  iv30: number | null;
+  hv30: number | null;
+}
+
 export interface PricesResponse {
   stocks: StockQuote[];
   options: OptionsData[];
+  volatility?: Record<string, VolatilityData>;
+}
+
+export interface OptionSuggestion {
+  ticker: string;
+  type: 'call' | 'put';
+  strike: number;
+  expiration: string; // YYYY-MM-DD
+  notes?: string;
 }
 
 export interface Message {
@@ -68,6 +82,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   streaming?: boolean;
+  optionSuggestions?: OptionSuggestion[];
 }
 
 export interface OptionContract {

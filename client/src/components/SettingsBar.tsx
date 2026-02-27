@@ -24,7 +24,7 @@ export function SettingsBar({ provider, onProviderChange, onRefreshPrices, price
         </svg>
         <span className="text-white font-bold text-lg tracking-tight">Stonks</span>
         <span className="text-slate-700 text-sm mx-1">|</span>
-        <span className="text-slate-500 text-xs tracking-wide">AI Trading Assistant</span>
+        <span className="text-slate-500 text-xs tracking-wide italic">up and to the right</span>
       </div>
 
       {/* Controls */}

@@ -7,7 +7,7 @@ import {
   type ColDef,
   type CellValueChangedEvent,
 } from 'ag-grid-community';
-import type { Holdings, PricesResponse, OptionEntry } from '../types';
+import type { Holdings, PricesResponse, OptionEntry, VolatilityData } from '../types';
 import { OptionChainModal } from './OptionChainModal';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -121,17 +121,17 @@ function OptionTypeCell(p: { value: string }) {
   );
 }
 
-// Saved vs target mid comparison for watched options
+// Target mid vs current live price
 function TargetMidCell(p: { value: number; data: WatchedOptionRow }) {
-  const { savedPrice } = p.data;
+  const { currentMid } = p.data;
   if (!p.value) return <span style={{ color: '#475569' }}>—</span>;
-  const diff = p.value - savedPrice;
-  const color = diff < 0 ? '#34d399' : diff > 0 ? '#f87171' : '#94a3b8';
-  const sign = diff >= 0 ? '+' : '';
+  const diff = currentMid != null ? currentMid - p.value : null;
+  const color = diff == null ? '#94a3b8' : diff < 0 ? '#34d399' : diff > 0 ? '#f87171' : '#94a3b8';
+  const sign = diff != null && diff >= 0 ? '+' : '';
   return (
     <span style={{ fontVariantNumeric: 'tabular-nums' }}>
       ${fmt2(p.value)}
-      {savedPrice > 0 && diff !== 0 && (
+      {diff != null && diff !== 0 && (
         <span style={{ color, fontSize: 11, marginLeft: 4 }}>({sign}{fmt2(diff)})</span>
       )}
     </span>
@@ -151,6 +151,20 @@ function OptGainPctCell(p: { value: number | null }) {
   if (p.value == null) return <span style={{ color: '#475569' }}>—</span>;
   const up = p.value >= 0;
   return <span style={{ color: up ? '#34d399' : '#f87171', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{up ? '+' : ''}{p.value.toFixed(1)}%</span>;
+}
+
+function VolCell(p: { value: number | null }) {
+  if (p.value == null) return <span style={{ color: '#475569' }}>—</span>;
+  const pct = (p.value * 100).toFixed(1) + '%';
+  const heat = p.value > 0.6 ? '#f87171' : p.value > 0.35 ? '#fb923c' : '#94a3b8';
+  return <span style={{ fontVariantNumeric: 'tabular-nums', color: heat }}>{pct}</span>;
+}
+
+function IvHvCell(p: { value: number | null }) {
+  if (p.value == null) return <span style={{ color: '#475569' }}>—</span>;
+  // > 1.2 → options expensive (red); < 0.8 → options cheap (green); near 1 → neutral
+  const color = p.value > 1.2 ? '#f87171' : p.value < 0.8 ? '#34d399' : '#94a3b8';
+  return <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, color }}>{p.value.toFixed(2)}x</span>;
 }
 
 // Delete button cell for option rows
@@ -187,8 +201,8 @@ interface OwnedOptionRow {
 }
 interface WatchedOptionRow {
   key: string; ticker: string; type: string; strike: number; expiration: string;
-  daysToExpiration: number; savedPrice: number; targetOptionMid: number;
-  underlyingPrice: number; notes: string;
+  daysToExpiration: number; currentMid: number | null; savedPrice: number; targetOptionMid: number;
+  underlyingPrice: number; iv30: number | null; hv30: number | null; ivhvRatio: number | null; notes: string;
 }
 
 // ── Add Stock modal ───────────────────────────────────────────────────
@@ -349,15 +363,24 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     if (!holdings) return [];
     return Object.entries(holdings.options)
       .filter(([, o]) => o.contracts === 0)
-      .map(([key, o]) => ({
-        key, ticker: o.ticker, type: o.type, strike: o.strike,
-        expiration: o.expiration, daysToExpiration: dteFromExpiry(o.expiration),
-        savedPrice: o.saved_price ?? 0,
-        targetOptionMid: o.target_price ?? 0,
-        underlyingPrice: priceMap.get(o.ticker)?.price ?? 0,
-        notes: o.notes,
-      }));
-  }, [holdings, priceMap]);
+      .map(([key, o]) => {
+        const vol: VolatilityData | undefined = prices?.volatility?.[o.ticker];
+        return {
+          key, ticker: o.ticker, type: o.type, strike: o.strike,
+          expiration: o.expiration, daysToExpiration: dteFromExpiry(o.expiration),
+          currentMid: optionPriceMap.get(key)?.mid ?? null,
+          savedPrice: o.saved_price ?? 0,
+          targetOptionMid: o.target_price ?? 0,
+          underlyingPrice: priceMap.get(o.ticker)?.price ?? 0,
+          iv30: vol?.iv30 ?? null,
+          hv30: vol?.hv30 ?? null,
+          ivhvRatio: vol?.iv30 != null && vol?.hv30 != null && vol.hv30 > 0
+            ? vol.iv30 / vol.hv30
+            : null,
+          notes: o.notes,
+        };
+      });
+  }, [holdings, priceMap, optionPriceMap, prices]);
 
   // ── save helpers ─────────────────────────────────────────────────
   const saveHoldings = useCallback(async (updated: Holdings) => {
@@ -418,9 +441,9 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     { field: 'strike',           headerName: 'Strike',  width: 85,  valueFormatter: p => `$${p.value}` },
     { field: 'expiration',       headerName: 'Expiry',  width: 110 },
     { field: 'daysToExpiration', headerName: 'DTE',     width: 60 },
-    { field: 'contracts',        headerName: 'Qty',     width: 55 },
-    { field: 'premiumPaid',      headerName: 'Paid',    width: 80,  valueFormatter: p => `$${fmt2(p.value)}` },
-    { field: 'currentMid',       headerName: 'Mid',     width: 80,  cellRenderer: OptMidCell },
+    { field: 'contracts',        headerName: 'Qty',         width: 55 },
+    { field: 'currentMid',       headerName: 'Current Mid', width: 105, cellRenderer: OptMidCell },
+    { field: 'premiumPaid',      headerName: 'Paid',        width: 80,  valueFormatter: p => `$${fmt2(p.value)}` },
     { field: 'gainDollar',       headerName: 'Gain $',  width: 105, cellRenderer: OptGainDollarCell },
     { field: 'gainPct',          headerName: 'Gain %',  width: 85,  cellRenderer: OptGainPctCell },
     { field: 'notes',            headerName: 'Notes',   flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },
@@ -434,6 +457,10 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     { field: 'expiration',      headerName: 'Expiry',       width: 110 },
     { field: 'daysToExpiration',headerName: 'DTE',          width: 60 },
     { field: 'underlyingPrice', headerName: 'Stock $',      width: 90,  valueFormatter: p => p.value > 0 ? `$${fmt2(p.value)}` : '—', cellStyle: { color: '#94a3b8' } },
+    { field: 'iv30',            headerName: 'IV30',         width: 80,  cellRenderer: VolCell },
+    { field: 'hv30',            headerName: 'HV30',         width: 80,  cellRenderer: VolCell },
+    { field: 'ivhvRatio',       headerName: 'IV/HV',        width: 80,  cellRenderer: IvHvCell },
+    { field: 'currentMid',      headerName: 'Current Mid',  width: 110, cellRenderer: OptMidCell },
     { field: 'savedPrice',      headerName: 'Saved Mid',    width: 105, valueFormatter: p => p.value > 0 ? `$${fmt2(p.value)}` : '—', cellStyle: { color: '#64748b' } },
     { field: 'targetOptionMid', headerName: 'Target Mid',   width: 120, cellRenderer: TargetMidCell },
     { field: 'notes',           headerName: 'Notes',        flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },

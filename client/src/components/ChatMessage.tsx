@@ -1,12 +1,71 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Markdown from 'react-markdown';
-import type { Message } from '../types';
+import type { Message, OptionSuggestion } from '../types';
 
 interface Props {
   message: Message;
+  onWatchOption?: (s: OptionSuggestion) => Promise<void>;
 }
 
-export function ChatMessage({ message }: Props) {
+function fmtExpiry(d: string) {
+  const dt = new Date(d + 'T12:00:00Z');
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+}
+
+function OptionSuggestionCard({ suggestion, onWatch }: {
+  suggestion: OptionSuggestion;
+  onWatch?: (s: OptionSuggestion) => Promise<void>;
+}) {
+  const [state, setState] = useState<'idle' | 'loading' | 'added'>('idle');
+
+  const handleWatch = async () => {
+    if (!onWatch || state !== 'idle') return;
+    setState('loading');
+    try {
+      await onWatch(suggestion);
+      setState('added');
+    } catch {
+      setState('idle');
+    }
+  };
+
+  const isCall = suggestion.type === 'call';
+
+  return (
+    <div className="flex items-center gap-2.5 bg-slate-900/70 border border-slate-700/60 rounded-xl px-3 py-2">
+      <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${
+        isCall
+          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25'
+          : 'bg-red-500/15 text-red-400 border border-red-500/25'
+      }`}>
+        {suggestion.type.toUpperCase()}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-white font-semibold">
+          {suggestion.ticker} ${suggestion.strike} · {fmtExpiry(suggestion.expiration)}
+        </div>
+        {suggestion.notes && (
+          <div className="text-[10px] text-slate-400 truncate mt-0.5">{suggestion.notes}</div>
+        )}
+      </div>
+      <button
+        onClick={handleWatch}
+        disabled={state !== 'idle'}
+        className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-all flex-shrink-0 ${
+          state === 'added'
+            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 cursor-default'
+            : state === 'loading'
+            ? 'bg-slate-700/60 text-slate-400 cursor-wait border border-slate-600'
+            : 'bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 hover:border-slate-500 cursor-pointer'
+        }`}
+      >
+        {state === 'added' ? '✓ Watching' : state === 'loading' ? '…' : '+ Watch'}
+      </button>
+    </div>
+  );
+}
+
+export function ChatMessage({ message, onWatchOption }: Props) {
   const isUser = message.role === 'user';
 
   if (isUser) {
@@ -54,6 +113,16 @@ export function ChatMessage({ message }: Props) {
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '150ms' }} />
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+        )}
+        {message.optionSuggestions && message.optionSuggestions.length > 0 && (
+          <div className="mt-2 flex flex-col gap-1.5">
+            <div className="text-[10px] text-slate-500 uppercase tracking-wide font-medium ml-0.5 mb-0.5">
+              Suggested options
+            </div>
+            {message.optionSuggestions.map((s, i) => (
+              <OptionSuggestionCard key={i} suggestion={s} onWatch={onWatchOption} />
+            ))}
           </div>
         )}
       </div>

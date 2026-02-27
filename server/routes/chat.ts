@@ -123,11 +123,28 @@ ${section(ownedOptions.map(fmtOwnedOption))}
 ### Options — Watching
 ${section(watchedOptions.map(fmtWatchedOption))}
 
+## CRITICAL RULE — YOU MUST FOLLOW THIS EVERY TIME
+Any time your response names a specific option contract (ticker + strike + expiration), you MUST output an OPTION_SUGGESTION block at the very end of your response. No exceptions. This is how the UI renders "Add to Watchlist" buttons for the user. If you skip this block, the user has no way to act on your recommendation.
+
+Example — if you recommend "MSFT $420 call expiring 2026-03-20", your response MUST end with:
+
+<<<OPTION_SUGGESTION>>>
+{"ticker": "MSFT", "type": "call", "strike": 420.0, "expiration": "2026-03-20", "notes": "brief reason"}
+<<<END_OPTION_SUGGESTION>>>
+
+Rules for the block:
+- expiration: YYYY-MM-DD format
+- type: "call" or "put" (lowercase only)
+- One block per contract; multiple blocks are allowed
+- Omit only if the contract is already in the user's watchlist/holdings
+
 ## Instructions
 - Provide thoughtful, data-driven advice based on the user's strategy and current positions
 - Reference specific holdings and prices when relevant
 - Be concise but thorough
-- When suggesting changes to holdings or strategy, include a FILE_UPDATE block at the end of your response in EXACTLY this format:
+
+## Holdings / Strategy Updates
+When suggesting changes to holdings or strategy, include a FILE_UPDATE block at the end of your response in EXACTLY this format:
 
 <<<FILE_UPDATE>>>
 {"file": "holdings", "content": { ...full new holdings object... }}
