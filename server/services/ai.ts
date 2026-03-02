@@ -71,6 +71,7 @@ export async function streamChat(
   provider:     AIProvider,
   res:          Response,
   toolExecutor?: ToolExecutor,
+  model?:        string,
 ): Promise<void> {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -78,9 +79,9 @@ export async function streamChat(
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (provider === 'anthropic') {
-    await streamAnthropic(messages, systemPrompt, res, toolExecutor);
+    await streamAnthropic(messages, systemPrompt, res, toolExecutor, model ?? 'claude-sonnet-4-6');
   } else {
-    await streamGemini(messages, systemPrompt, res, toolExecutor);
+    await streamGemini(messages, systemPrompt, res, toolExecutor, model ?? 'gemini-2.0-flash');
   }
 }
 
@@ -91,6 +92,7 @@ async function streamAnthropic(
   systemPrompt: string,
   res:          Response,
   toolExecutor?: ToolExecutor,
+  model = 'claude-sonnet-4-6',
 ): Promise<void> {
   let anthropicMessages: Anthropic.MessageParam[] = messages.map(m => ({
     role:    m.role,
@@ -101,7 +103,7 @@ async function streamAnthropic(
   const MAX_ROUNDS = 5;
   for (let round = 0; round < MAX_ROUNDS && toolExecutor; round++) {
     const response = await anthropicClient.messages.create({
-      model:    'claude-sonnet-4-6',
+      model,
       max_tokens: 4096,
       system:   systemPrompt,
       messages: anthropicMessages,
@@ -130,7 +132,7 @@ async function streamAnthropic(
 
   // Final streaming response
   const stream = await anthropicClient.messages.stream({
-    model:      'claude-sonnet-4-6',
+    model,
     max_tokens: 4096,
     system:     systemPrompt,
     messages:   anthropicMessages,
@@ -154,9 +156,10 @@ async function streamGemini(
   systemPrompt: string,
   res:          Response,
   toolExecutor?: ToolExecutor,
+  modelId = 'gemini-2.0-flash',
 ): Promise<void> {
   const model = geminiClient.getGenerativeModel({
-    model:             'gemini-2.0-flash',
+    model:             modelId,
     systemInstruction: systemPrompt,
     ...(toolExecutor ? { tools: GEMINI_TOOLS } : {}),
   });

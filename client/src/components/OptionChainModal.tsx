@@ -10,10 +10,29 @@ function contractType(symbol: string): 'call' | 'put' {
 }
 
 // ── Watch cell renderer ───────────────────────────────────────────────
-type WatchCtx = { onWatch: (c: OptionContract) => void };
+type WatchCtx = {
+  onWatch: (c: OptionContract) => void;
+  ownedKeys: Set<string>;
+  watchedKeys: Set<string>;
+};
 
 function WatchCell(p: { data: OptionContract; context: WatchCtx }) {
   if (!p.data) return null;
+  const sym = p.data.contractSymbol;
+  if (p.context.ownedKeys.has(sym)) {
+    return (
+      <span style={{ fontSize: 10, fontWeight: 700, color: '#34d399', background: 'rgba(52,211,153,0.15)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.04em' }}>
+        OWNED
+      </span>
+    );
+  }
+  if (p.context.watchedKeys.has(sym)) {
+    return (
+      <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.04em' }}>
+        WATCH
+      </span>
+    );
+  }
   return (
     <button
       onClick={e => { e.stopPropagation(); p.context.onWatch(p.data); }}
@@ -96,15 +115,23 @@ const putCols  = makeCols(false);
 const defaultColDef: ColDef = { resizable: true, sortable: true, suppressHeaderMenuButton: true };
 
 function getRowStyle(params: RowClassParams<OptionContract>) {
-  if (params.data?.inTheMoney) return { background: 'rgba(16,185,129,0.08)' };
+  const sym = params.data?.contractSymbol;
+  const ctx = params.context as WatchCtx | undefined;
+  if (sym && ctx?.ownedKeys.has(sym))   return { background: 'rgba(52,211,153,0.18)' };
+  if (sym && ctx?.watchedKeys.has(sym)) return { background: 'rgba(251,191,36,0.13)' };
+  if (params.data?.inTheMoney)          return { background: 'rgba(16,185,129,0.08)' };
   return undefined;
 }
 
 const watchCol: ColDef<OptionContract> = {
-  headerName: '', width: 40, sortable: false, resizable: false, cellRenderer: WatchCell,
+  headerName: '', width: 76, sortable: false, resizable: false, cellRenderer: WatchCell,
 };
 
-function ContractGrid({ rows, isCall, onWatch }: { rows: OptionContract[]; isCall: boolean; onWatch: (c: OptionContract) => void }) {
+function ContractGrid({ rows, isCall, ownedKeys, watchedKeys, onWatch }: {
+  rows: OptionContract[]; isCall: boolean;
+  ownedKeys: Set<string>; watchedKeys: Set<string>;
+  onWatch: (c: OptionContract) => void;
+}) {
   const cols = React.useMemo(() => [...(isCall ? callCols : putCols), watchCol], [isCall]);
   if (rows.length === 0) {
     return <div style={{ padding: '6px 0 8px', color: '#475569', fontSize: 12 }}>No contracts match filters</div>;
@@ -119,7 +146,7 @@ function ContractGrid({ rows, isCall, onWatch }: { rows: OptionContract[]; isCal
         rowHeight={36}
         headerHeight={32}
         getRowStyle={getRowStyle}
-        context={{ onWatch }}
+        context={{ onWatch, ownedKeys, watchedKeys }}
       />
     </div>
   );
@@ -127,7 +154,7 @@ function ContractGrid({ rows, isCall, onWatch }: { rows: OptionContract[]; isCal
 
 // ── expiry group section ───────────────────────────────────────────────
 
-function ExpirySection({ group, view, onWatch }: { group: ExpiryGroup; view: 'calls' | 'puts' | 'both'; onWatch: (c: OptionContract) => void }) {
+function ExpirySection({ group, view, ownedKeys, watchedKeys, onWatch }: { group: ExpiryGroup; view: 'calls' | 'puts' | 'both'; ownedKeys: Set<string>; watchedKeys: Set<string>; onWatch: (c: OptionContract) => void }) {
   const d    = dte(group.expiry);
   const freq = getExpiryType(group.expiry);
   const meta = FREQ_META[freq];
@@ -171,7 +198,7 @@ function ExpirySection({ group, view, onWatch }: { group: ExpiryGroup; view: 'ca
             {view === 'both' && (
               <div style={{ fontSize: 11, fontWeight: 600, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Calls</div>
             )}
-            <ContractGrid rows={group.calls} isCall={true} onWatch={onWatch} />
+            <ContractGrid rows={group.calls} isCall={true} ownedKeys={ownedKeys} watchedKeys={watchedKeys} onWatch={onWatch} />
           </div>
         )}
         {(view === 'puts' || view === 'both') && (
@@ -179,7 +206,7 @@ function ExpirySection({ group, view, onWatch }: { group: ExpiryGroup; view: 'ca
             {view === 'both' && (
               <div style={{ fontSize: 11, fontWeight: 600, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Puts</div>
             )}
-            <ContractGrid rows={group.puts} isCall={false} onWatch={onWatch} />
+            <ContractGrid rows={group.puts} isCall={false} ownedKeys={ownedKeys} watchedKeys={watchedKeys} onWatch={onWatch} />
           </div>
         )}
       </div>
@@ -224,9 +251,13 @@ interface Props {
   currentPrice: number;
   onClose: () => void;
   onWatchAdded?: (key: string, entry: OptionEntry) => Promise<void>;
+  ownedKeys?: Set<string>;
+  watchedKeys?: Set<string>;
 }
 
-export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded }: Props) {
+export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, ownedKeys, watchedKeys }: Props) {
+  const trackedOwned   = ownedKeys   ?? new Set<string>();
+  const trackedWatched = watchedKeys ?? new Set<string>();
   const { loading, loadingExpiries, error, expiryDates, groups, filters, setFilters, toggleExpiry, underlyingPrice } = useOptionChain(ticker);
 
   const price = underlyingPrice || currentPrice;
@@ -424,12 +455,12 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded }
             <div className="text-slate-500 text-sm py-8 text-center">Select one or more expiry dates above</div>
           )}
           {groups.map(group => (
-            <ExpirySection key={group.expiry} group={group} view={view} onWatch={handleWatch} />
+            <ExpirySection key={group.expiry} group={group} view={view} ownedKeys={trackedOwned} watchedKeys={trackedWatched} onWatch={handleWatch} />
           ))}
         </div>
 
-        <div className="px-5 py-2 border-t border-slate-800 text-xs text-slate-600 flex-shrink-0 flex gap-4">
-          <span>ITM highlighted</span>
+        <div className="px-5 py-2 border-t border-slate-800 text-xs text-slate-600 flex-shrink-0 flex gap-4 flex-wrap">
+          <span><span style={{ color: '#34d399' }}>■</span> Owned &nbsp;<span style={{ color: '#fbbf24' }}>■</span> Watching &nbsp;<span style={{ color: '#1e4a36' }}>■</span> ITM</span>
           <span>·</span>
           <span>
             <span style={{ color: FREQ_META.monthly.color }}>M</span>onthly &nbsp;

@@ -1,9 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { AIProvider, AccountMeta } from '../types';
+import { PROVIDER_MODELS } from '../types';
 
 interface Props {
   provider: AIProvider;
   onProviderChange: (p: AIProvider) => void;
+  model: string;
+  onModelChange: (m: string) => void;
   onRefreshPrices: () => void;
   pricesLoading: boolean;
   lastRefreshed: Date | null;
@@ -16,6 +19,8 @@ interface Props {
 export function SettingsBar({
   provider,
   onProviderChange,
+  model,
+  onModelChange,
   onRefreshPrices,
   pricesLoading,
   lastRefreshed,
@@ -149,7 +154,7 @@ export function SettingsBar({
           )}
         </div>
 
-        {/* Model selector */}
+        {/* Provider + model selector */}
         <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${provider === 'none' ? 'bg-slate-600' : 'bg-emerald-400 animate-pulse'}`} />
           <div className="relative">
@@ -159,12 +164,30 @@ export function SettingsBar({
               style={{ backgroundColor: 'transparent', color: '#f1f5f9' }}
               className="appearance-none text-xs font-medium pr-5 focus:outline-none cursor-pointer"
             >
-              <option value="anthropic" style={{ backgroundColor: '#1e293b' }}>Claude (Anthropic)</option>
-              <option value="gemini" style={{ backgroundColor: '#1e293b' }}>Gemini (Google)</option>
+              <option value="anthropic" style={{ backgroundColor: '#1e293b' }}>Claude</option>
+              <option value="gemini" style={{ backgroundColor: '#1e293b' }}>Gemini</option>
               <option value="none" style={{ backgroundColor: '#1e293b' }}>No AI</option>
             </select>
             <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">▾</span>
           </div>
+          {PROVIDER_MODELS[provider] && PROVIDER_MODELS[provider].length > 0 && (
+            <>
+              <span className="text-slate-700 text-xs">|</span>
+              <div className="relative">
+                <select
+                  value={model}
+                  onChange={(e) => onModelChange(e.target.value)}
+                  style={{ backgroundColor: 'transparent', color: '#94a3b8' }}
+                  className="appearance-none text-xs pr-4 focus:outline-none cursor-pointer"
+                >
+                  {PROVIDER_MODELS[provider].map(m => (
+                    <option key={m.id} value={m.id} style={{ backgroundColor: '#1e293b', color: '#f1f5f9' }}>{m.label}</option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">▾</span>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Refresh section */}

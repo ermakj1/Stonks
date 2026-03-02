@@ -140,6 +140,13 @@ app.use('/api/prices', pricesRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/options', optionsRouter);
 
+app.get('/api/config', (_req, res) => {
+  res.json({
+    anthropic: !!process.env.ANTHROPIC_API_KEY,
+    gemini:    !!process.env.GEMINI_API_KEY,
+  });
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });

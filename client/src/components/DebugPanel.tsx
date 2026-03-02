@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 
 interface ContextData {
   systemPrompt: string;
@@ -14,7 +14,7 @@ interface Section {
 
 const SECTIONS: Section[] = [
   { id: 'systemPrompt', label: 'System Prompt',  description: 'Full text sent to the AI on every message (persona + strategy + holdings + prices)' },
-  { id: 'holdings',     label: 'Holdings JSON',  description: 'Raw holdings.json as loaded from disk' },
+  { id: 'holdings',     label: 'Holdings JSON',  description: 'Active account holdings — same data the AI receives on every chat message' },
   { id: 'prices',       label: 'Prices (Raw)',   description: 'Live prices fetched for all positions — this feeds the system prompt' },
 ];
 
@@ -84,6 +84,9 @@ export function DebugPanel() {
     }
   }, []);
 
+  // Auto-fetch when the panel is first opened
+  useEffect(() => { fetchContext(); }, [fetchContext]);
+
   const fetchOptions = useCallback(async () => {
     const t = optTicker.trim().toUpperCase();
     if (!t) return;
@@ -134,7 +137,7 @@ export function DebugPanel() {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M21 12a9 9 0 1 1-6.219-8.56" />
               </svg>
-              {context ? 'Refresh' : 'Load Context'}
+              Refresh
             </>
           )}
         </button>
@@ -146,13 +149,8 @@ export function DebugPanel() {
           <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3">{error}</div>
         )}
 
-        {!context && !loading && !error && (
-          <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-slate-700">
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <p className="text-slate-500 text-sm">Click <span className="text-slate-300 font-medium">Load Context</span> to fetch the current AI context</p>
-          </div>
+        {!context && loading && (
+          <div className="flex items-center justify-center py-16 text-slate-500 text-sm">Loading context…</div>
         )}
 
         {/* Context sections */}

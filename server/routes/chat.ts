@@ -229,9 +229,10 @@ chatRouter.get('/context', async (_req, res) => {
 
 chatRouter.post('/', async (req, res) => {
   try {
-    const { messages, provider = process.env.AI_PROVIDER ?? 'anthropic' } = req.body as {
+    const { messages, provider = process.env.AI_PROVIDER ?? 'anthropic', model } = req.body as {
       messages: ChatMessage[];
       provider?: AIProvider;
+      model?: string;
     };
 
     if (!messages || !Array.isArray(messages)) {
@@ -251,7 +252,7 @@ chatRouter.post('/', async (req, res) => {
     const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices);
     const toolExecutor = makeToolExecutor(priceMap);
 
-    await streamChat(messages, systemPrompt, provider, res, toolExecutor);
+    await streamChat(messages, systemPrompt, provider, res, toolExecutor, model);
   } catch (err) {
     console.error('Chat error:', err);
     if (!res.headersSent) {

@@ -1,5 +1,26 @@
 export type AIProvider = 'anthropic' | 'gemini' | 'none';
 
+export interface ModelOption { id: string; label: string; }
+
+export const PROVIDER_MODELS: Record<string, ModelOption[]> = {
+  anthropic: [
+    { id: 'claude-opus-4-6',           label: 'Claude Opus 4.6'    },
+    { id: 'claude-sonnet-4-6',         label: 'Claude Sonnet 4.6'  },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5'   },
+  ],
+  gemini: [
+    { id: 'gemini-2.0-flash',   label: 'Gemini 2.0 Flash'  },
+    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
+    { id: 'gemini-1.5-pro',     label: 'Gemini 1.5 Pro'    },
+    { id: 'gemini-1.5-flash',   label: 'Gemini 1.5 Flash'  },
+  ],
+};
+
+export const DEFAULT_MODEL: Record<string, string> = {
+  anthropic: 'claude-sonnet-4-6',
+  gemini:    'gemini-2.0-flash',
+};
+
 export interface AccountMeta { id: string; name: string; }
 
 export interface StockEntry {

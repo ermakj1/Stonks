@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { AIProvider, Holdings, PricesResponse, AccountMeta } from './types';
+import { DEFAULT_MODEL } from './types';
 import { SettingsBar } from './components/SettingsBar';
 import { HoldingsPanel } from './components/HoldingsPanel';
 import { Chat } from './components/Chat';
@@ -10,6 +11,13 @@ type RightTab = 'chat' | 'strategy' | 'prompt' | 'debug';
 
 export default function App() {
   const [provider, setProvider] = useState<AIProvider>('anthropic');
+  const [model, setModel] = useState<string>(DEFAULT_MODEL['anthropic']);
+  const [providerKeys, setProviderKeys] = useState<Record<string, boolean>>({});
+
+  const handleProviderChange = (p: AIProvider) => {
+    setProvider(p);
+    if (DEFAULT_MODEL[p]) setModel(DEFAULT_MODEL[p]);
+  };
   const [rightTab, setRightTab] = useState<RightTab>('chat');
   const [holdings, setHoldings] = useState<Holdings | null>(null);
   const [strategy, setStrategy] = useState('');
@@ -103,6 +111,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(d => setProviderKeys(d as Record<string, boolean>))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     fetchAccounts();
     fetchHoldings();
     fetchStrategy();
@@ -158,7 +173,9 @@ export default function App() {
     <div className="flex flex-col h-screen overflow-hidden bg-slate-950">
       <SettingsBar
         provider={provider}
-        onProviderChange={setProvider}
+        onProviderChange={handleProviderChange}
+        model={model}
+        onModelChange={setModel}
         onRefreshPrices={fetchPrices}
         pricesLoading={pricesLoading}
         lastRefreshed={lastRefreshed}
@@ -202,15 +219,18 @@ export default function App() {
 
           {/* Tab content */}
           <div className="flex-1 overflow-hidden">
-            {rightTab === 'chat' && (
+            {/* Chat is always mounted so message history survives tab switches */}
+            <div className={rightTab === 'chat' ? 'h-full overflow-hidden' : 'hidden'}>
               <Chat
                 provider={provider}
+                model={model}
+                providerKeys={providerKeys}
                 holdings={holdings}
                 strategy={strategy}
                 onHoldingsUpdated={handleHoldingsUpdated}
                 onStrategyUpdated={handleStrategyUpdated}
               />
-            )}
+            </div>
             {rightTab === 'strategy' && (
               <StrategyPanel
                 value={strategy}

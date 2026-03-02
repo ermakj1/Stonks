@@ -5,6 +5,8 @@ import { FileDiffModal } from './FileDiffModal';
 
 interface Props {
   provider: AIProvider;
+  model: string;
+  providerKeys: Record<string, boolean>;
   holdings: Holdings | null;
   strategy: string;
   onHoldingsUpdated: () => void;
@@ -36,7 +38,7 @@ function extractOptionSuggestions(text: string): { clean: string; suggestions: O
   return { clean, suggestions };
 }
 
-export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrategyUpdated }: Props) {
+export function Chat({ provider, model, providerKeys, holdings, strategy, onHoldingsUpdated, onStrategyUpdated }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -85,7 +87,7 @@ export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrate
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatMessages, provider }),
+        body: JSON.stringify({ messages: chatMessages, provider, model }),
       });
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -257,7 +259,51 @@ export function Chat({ provider, holdings, strategy, onHoldingsUpdated, onStrate
         <div>
           <p className="text-slate-300 font-semibold text-sm mb-1">AI chat is disabled</p>
           <p className="text-slate-500 text-xs leading-relaxed max-w-xs">
-            Select <span className="text-slate-300 font-medium">Claude (Anthropic)</span> or <span className="text-slate-300 font-medium">Gemini (Google)</span> from the provider menu above to enable AI chat. No API credits will be used while "No AI" is selected.
+            Select <span className="text-slate-300 font-medium">Claude (Anthropic)</span> or <span className="text-slate-300 font-medium">Gemini (Google)</span> from the provider menu above to enable AI chat.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const KEY_NAME: Record<string, string> = { anthropic: 'ANTHROPIC_API_KEY', gemini: 'GEMINI_API_KEY' };
+  const PROVIDER_LABEL: Record<string, string> = { anthropic: 'Anthropic (Claude)', gemini: 'Google (Gemini)' };
+  const PROVIDER_URL: Record<string, string> = {
+    anthropic: 'https://console.anthropic.com/settings/keys',
+    gemini: 'https://aistudio.google.com/app/apikey',
+  };
+
+  if (providerKeys[provider] === false) {
+    const keyName = KEY_NAME[provider] ?? 'API_KEY';
+    const label   = PROVIDER_LABEL[provider] ?? provider;
+    const url     = PROVIDER_URL[provider];
+    return (
+      <div className="flex flex-col h-full items-center justify-center gap-5 px-10 text-center">
+        <div className="w-14 h-14 rounded-full bg-amber-400/10 border border-amber-400/30 flex items-center justify-center">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-amber-400">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+        </div>
+        <div className="flex flex-col gap-2 max-w-sm">
+          <p className="text-slate-200 font-semibold text-sm">No API key for {label}</p>
+          <p className="text-slate-500 text-xs leading-relaxed">
+            Add your key to the <code className="text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded text-[11px]">.env</code> file in the project root, then restart the server.
+          </p>
+          <div className="mt-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-left">
+            <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider mb-1.5">In your .env file:</p>
+            <code className="text-emerald-400 text-xs font-mono">{keyName}=your_key_here</code>
+          </div>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors"
+          >
+            Get a {label} API key →
+          </a>
+          <p className="text-slate-600 text-[11px] mt-1">
+            Or switch to a different provider in the menu above.
           </p>
         </div>
       </div>

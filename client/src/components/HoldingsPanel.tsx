@@ -108,14 +108,19 @@ function TickerCell(p: { value: string; data: StockRow; context: StockCtx }) {
   );
 }
 
-function OptionTickerCell(p: { value: string }) {
+function OptionTickerCell(p: { value: string; data: OptionRow }) {
   const btnBase: React.CSSProperties = {
     background: 'none', border: 'none', padding: '2px 3px', cursor: 'pointer',
     borderRadius: 4, lineHeight: 1, display: 'flex', alignItems: 'center', textDecoration: 'none',
   };
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-      <span style={{ fontWeight: 700 }}>{p.value}</span>
+      <span style={{ fontWeight: 700, color: p.data.isWatchlist ? '#64748b' : '#fff', fontSize: 14 }}>
+        {p.value}
+        {p.data.isWatchlist && (
+          <span style={{ fontSize: 9, fontWeight: 600, marginLeft: 4, color: '#475569', letterSpacing: '0.05em', textTransform: 'uppercase', verticalAlign: 'middle' }}>watch</span>
+        )}
+      </span>
       <a href={FIDELITY_OPTIONS_URL(p.value)} target="_blank" rel="noopener noreferrer" title="Option chain on Fidelity"
         onClick={e => e.stopPropagation()}
         style={{ ...btnBase, color: '#475569', textDecoration: 'none' }}
@@ -163,7 +168,7 @@ function OptionTypeCell(p: { value: string }) {
 }
 
 // Target mid vs current live price
-function TargetMidCell(p: { value: number; data: WatchedOptionRow }) {
+function TargetMidCell(p: { value: number; data: { currentMid: number | null } }) {
   const { currentMid } = p.data;
   if (!p.value) return <span style={{ color: '#475569' }}>—</span>;
   const diff = currentMid != null ? currentMid - p.value : null;
@@ -210,7 +215,7 @@ function IvHvCell(p: { value: number | null }) {
 
 // Delete button cell for option rows
 type OptCtx = { deleteOption: (key: string) => void };
-function DeleteOptionCell(p: { data: OwnedOptionRow | WatchedOptionRow; context: OptCtx }) {
+function DeleteOptionCell(p: { data: OptionRow; context: OptCtx }) {
   return (
     <button
       onClick={e => { e.stopPropagation(); p.context.deleteOption(p.data.key); }}
@@ -233,17 +238,21 @@ interface StockRow {
   dayChangePct: number; marketValue: number; gainDollar: number; gainPct: number;
   actualPct: number; targetPct: number; notes: string; isSummary?: boolean;
 }
-interface OwnedOptionRow {
+interface OptionRow {
   key: string; ticker: string; type: string; strike: number; expiration: string;
-  contracts: number; premiumPaid: number; daysToExpiration: number; notes: string;
+  contracts: number; daysToExpiration: number; notes: string; isWatchlist: boolean;
+  // owned fields
+  premiumPaid: number;
   currentMid: number | null;
   gainDollar: number | null;
   gainPct: number | null;
-}
-interface WatchedOptionRow {
-  key: string; ticker: string; type: string; strike: number; expiration: string;
-  daysToExpiration: number; currentMid: number | null; savedPrice: number; targetOptionMid: number;
-  underlyingPrice: number; iv30: number | null; hv30: number | null; ivhvRatio: number | null; notes: string;
+  // volatility / watched fields
+  underlyingPrice: number;
+  iv30: number | null;
+  hv30: number | null;
+  ivhvRatio: number | null;
+  savedPrice: number | null;
+  targetOptionMid: number;
 }
 
 // ── Add Stock modal ───────────────────────────────────────────────────
@@ -328,6 +337,141 @@ function AddStockModal({ existingTickers, onAdd, onClose }: AddStockModalProps) 
   );
 }
 
+// ── Add Option modal ──────────────────────────────────────────────────
+
+function buildOccKey(ticker: string, type: string, strike: number, expiration: string): string {
+  const [yyyy, mm, dd] = expiration.split('-');
+  const yy = yyyy.slice(2);
+  const cp = type.toLowerCase() === 'call' ? 'C' : 'P';
+  const strikeStr = Math.round(strike * 1000).toString().padStart(8, '0');
+  return `${ticker.toUpperCase()}${yy}${mm}${dd}${cp}${strikeStr}`;
+}
+
+interface AddOptionModalProps {
+  existingKeys: string[];
+  onAddOwned: (key: string, entry: OptionEntry) => Promise<void>;
+  onAddWatch: (ticker: string, type: string, strike: number, expiration: string, notes: string) => Promise<void>;
+  onClose: () => void;
+}
+
+function AddOptionModal({ existingKeys, onAddOwned, onAddWatch, onClose }: AddOptionModalProps) {
+  const [ticker, setTicker]         = useState('');
+  const [optType, setOptType]       = useState<'call' | 'put'>('call');
+  const [strike, setStrike]         = useState('');
+  const [expiration, setExpiration] = useState('');
+  const [contracts, setContracts]   = useState('0');
+  const [premium, setPremium]       = useState('');
+  const [notes, setNotes]           = useState('');
+  const [error, setError]           = useState('');
+  const [saving, setSaving]         = useState(false);
+  const tickerRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { tickerRef.current?.focus(); }, []);
+
+  const isOwned = Number(contracts) > 0;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const t = ticker.trim().toUpperCase();
+    if (!t) { setError('Ticker is required'); return; }
+    if (!strike || Number(strike) <= 0) { setError('Strike must be greater than 0'); return; }
+    if (!expiration) { setError('Expiration date is required'); return; }
+    const key = buildOccKey(t, optType, Number(strike), expiration);
+    if (existingKeys.includes(key)) { setError('That option is already in your list'); return; }
+    setSaving(true);
+    try {
+      if (isOwned) {
+        const entry: OptionEntry = {
+          ticker: t, type: optType, strike: Number(strike),
+          expiration, contracts: Number(contracts),
+          premium_paid: Number(premium) || 0,
+          notes: notes.trim(),
+        };
+        await onAddOwned(key, entry);
+      } else {
+        await onAddWatch(t, optType, Number(strike), expiration, notes.trim());
+      }
+      onClose();
+    } catch { setError('Failed to save'); setSaving(false); }
+  };
+
+  const inp: React.CSSProperties = { width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', padding: '6px 10px', fontSize: 13, outline: 'none', boxSizing: 'border-box' };
+  const lbl: React.CSSProperties = { fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={handleSubmit} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 12, padding: 24, width: 360, boxShadow: '0 25px 50px rgba(0,0,0,0.6)' }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <span style={{ fontWeight: 700, color: '#e2e8f0', fontSize: 15 }}>Add Option</span>
+          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={lbl}>Ticker *</label>
+              <input ref={tickerRef} style={{ ...inp, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}
+                value={ticker} onChange={e => { setTicker(e.target.value); setError(''); }} placeholder="e.g. AAPL" />
+            </div>
+            <div>
+              <label style={lbl}>Type</label>
+              <div style={{ display: 'flex', gap: 6, paddingTop: 2 }}>
+                {(['call', 'put'] as const).map(t => (
+                  <button key={t} type="button" onClick={() => setOptType(t)}
+                    style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: '1px solid', cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                      borderColor: optType === t ? (t === 'call' ? '#10b981' : '#ef4444') : '#334155',
+                      background: optType === t ? (t === 'call' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)') : 'none',
+                      color: optType === t ? (t === 'call' ? '#34d399' : '#f87171') : '#94a3b8',
+                    }}>
+                    {t.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={lbl}>Strike *</label>
+              <input style={inp} type="number" min="0" step="any" value={strike}
+                onChange={e => { setStrike(e.target.value); setError(''); }} placeholder="e.g. 200" />
+            </div>
+            <div>
+              <label style={lbl}>Expiration *</label>
+              <input style={{ ...inp, colorScheme: 'dark' }} type="date" value={expiration}
+                onChange={e => { setExpiration(e.target.value); setError(''); }} />
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={lbl}>Qty (contracts)</label>
+              <input style={inp} type="number" min="0" step="1" value={contracts}
+                onChange={e => setContracts(e.target.value)} />
+              <span style={{ fontSize: 10, color: '#475569', marginTop: 2, display: 'block' }}>0 = watchlist only</span>
+            </div>
+            <div style={{ opacity: isOwned ? 1 : 0.4 }}>
+              <label style={lbl}>Premium Paid</label>
+              <input style={inp} type="number" min="0" step="any" value={premium}
+                disabled={!isOwned} onChange={e => setPremium(e.target.value)} placeholder="per contract" />
+            </div>
+          </div>
+          <div>
+            <label style={lbl}>Notes</label>
+            <input style={inp} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12, color: '#f87171' }}>{error}</div>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
+          <button type="button" onClick={onClose} style={{ padding: '7px 16px', borderRadius: 7, border: '1px solid #334155', background: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+          <button type="submit" disabled={saving} style={{ padding: '7px 16px', borderRadius: 7, border: 'none', background: '#059669', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: 13, opacity: saving ? 0.7 : 1 }}>
+            {saving ? 'Adding…' : isOwned ? 'Add Owned' : 'Add to Watchlist'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 // ── component ────────────────────────────────────────────────────────
 
 interface Props {
@@ -340,6 +484,7 @@ interface Props {
 export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: Props) {
   const [optionChainTicker, setOptionChainTicker] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showAddOptionModal, setShowAddOptionModal] = useState(false);
 
   const priceMap = useMemo(() => new Map(prices?.stocks.map(s => [s.ticker, s]) ?? []), [prices]);
   const optionPriceMap = useMemo(() => new Map(prices?.options.map(o => [o.key, o]) ?? []), [prices]);
@@ -375,52 +520,36 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     notes: '', isSummary: true,
   };
 
-  // ── option rows ──────────────────────────────────────────────────
-  const ownedOptionRows = useMemo<OwnedOptionRow[]>(() => {
+  // ── option rows (owned + watchlist unified) ──────────────────────
+  const optionRows = useMemo<OptionRow[]>(() => {
     if (!holdings) return [];
-    return Object.entries(holdings.options)
-      .filter(([, o]) => o.contracts > 0)
-      .map(([key, o]) => {
-        const priceData = optionPriceMap.get(key);
-        const currentMid = priceData?.mid ?? null;
-        const totalCost = o.premium_paid * o.contracts * 100;
-        const gainDollar = currentMid != null && totalCost > 0
-          ? (currentMid - o.premium_paid) * o.contracts * 100
-          : null;
-        const gainPct = gainDollar != null && totalCost > 0
-          ? (gainDollar / totalCost) * 100
-          : null;
-        return {
-          key, ticker: o.ticker, type: o.type, strike: o.strike,
-          expiration: o.expiration, contracts: o.contracts, premiumPaid: o.premium_paid,
-          daysToExpiration: dteFromExpiry(o.expiration),
-          currentMid, gainDollar, gainPct,
-          notes: o.notes,
-        };
-      });
-  }, [holdings, optionPriceMap]);
-
-  const watchedOptionRows = useMemo<WatchedOptionRow[]>(() => {
-    if (!holdings) return [];
-    return Object.entries(holdings.options)
-      .filter(([, o]) => o.contracts === 0)
-      .map(([key, o]) => {
-        const vol: VolatilityData | undefined = prices?.volatility?.[o.ticker];
-        return {
-          key, ticker: o.ticker, type: o.type, strike: o.strike,
-          expiration: o.expiration, daysToExpiration: dteFromExpiry(o.expiration),
-          currentMid: optionPriceMap.get(key)?.mid ?? null,
-          savedPrice: o.saved_price ?? 0,
-          targetOptionMid: o.target_price ?? 0,
-          underlyingPrice: priceMap.get(o.ticker)?.price ?? 0,
-          iv30: vol?.iv30 ?? null,
-          hv30: vol?.hv30 ?? null,
-          ivhvRatio: vol?.iv30 != null && vol?.hv30 != null && vol.hv30 > 0
-            ? vol.iv30 / vol.hv30
-            : null,
-          notes: o.notes,
-        };
-      });
+    return Object.entries(holdings.options).map(([key, o]) => {
+      const isWatchlist = o.contracts === 0;
+      const currentMid = optionPriceMap.get(key)?.mid ?? null;
+      const vol: VolatilityData | undefined = prices?.volatility?.[o.ticker];
+      const optionCost = o.premium_paid * o.contracts * 100;
+      const gainDollar = !isWatchlist && currentMid != null && optionCost > 0
+        ? (currentMid - o.premium_paid) * o.contracts * 100
+        : null;
+      const gainPct = gainDollar != null && optionCost > 0
+        ? (gainDollar / optionCost) * 100
+        : null;
+      return {
+        key, ticker: o.ticker, type: o.type, strike: o.strike,
+        expiration: o.expiration, contracts: o.contracts,
+        daysToExpiration: dteFromExpiry(o.expiration),
+        isWatchlist, premiumPaid: o.premium_paid,
+        currentMid, gainDollar, gainPct,
+        underlyingPrice: priceMap.get(o.ticker)?.price ?? 0,
+        iv30: vol?.iv30 ?? null,
+        hv30: vol?.hv30 ?? null,
+        ivhvRatio: vol?.iv30 != null && vol?.hv30 != null && vol.hv30 > 0
+          ? vol.iv30 / vol.hv30 : null,
+        savedPrice: o.saved_price ?? null,
+        targetOptionMid: o.target_price ?? 0,
+        notes: o.notes,
+      };
+    });
   }, [holdings, priceMap, optionPriceMap, prices]);
 
   // ── save helpers ─────────────────────────────────────────────────
@@ -434,6 +563,27 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     const { ticker, shares, costBasis, targetPct, notes } = e.data;
     const updated: Holdings = { ...holdings, stocks: { ...holdings.stocks, [ticker]: { ...holdings.stocks[ticker], shares: Number(shares), cost_basis: Number(costBasis), target_allocation_pct: Number(targetPct), notes: String(notes ?? '') } } };
     try { await saveHoldings(updated); } catch (err) { console.error('Failed to save:', err); }
+  }, [holdings, saveHoldings]);
+
+  const onOptionCellValueChanged = useCallback(async (e: CellValueChangedEvent<OptionRow>) => {
+    if (!holdings) return;
+    const { key, contracts, premiumPaid, targetOptionMid, notes } = e.data;
+    const existing = holdings.options[key];
+    if (!existing) return;
+    const updated: Holdings = {
+      ...holdings,
+      options: {
+        ...holdings.options,
+        [key]: {
+          ...existing,
+          contracts: Number(contracts ?? 0),
+          premium_paid: Number(premiumPaid ?? 0),
+          target_price: Number(targetOptionMid ?? 0),
+          notes: String(notes ?? ''),
+        },
+      },
+    };
+    try { await saveHoldings(updated); } catch (err) { console.error('Failed to save option:', err); }
   }, [holdings, saveHoldings]);
 
   const handleAddStock = useCallback(async (ticker: string, shares: number, costBasis: number, targetPct: number, notes: string) => {
@@ -458,6 +608,15 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     await saveHoldings({ ...holdings, options: { ...holdings.options, [key]: entry } });
   }, [holdings, saveHoldings]);
 
+  const handleAddOptionWatchPost = useCallback(async (ticker: string, type: string, strike: number, expiration: string, notes: string) => {
+    await fetch('/api/holdings/watch-option', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, type, strike, expiration, notes }),
+    });
+    onHoldingsUpdated?.();
+  }, [onHoldingsUpdated]);
+
   // ── column defs ──────────────────────────────────────────────────
   const defaultColDef = useMemo<ColDef>(() => ({ resizable: true, sortable: true, suppressHeaderMenuButton: true }), []);
   const ec = { cursor: 'text' };
@@ -476,49 +635,45 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     { field: 'notes',        headerName: 'Notes',      flex: 1, minWidth: 80, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : { ...ec, color: '#64748b', fontSize: '12px' }, onCellValueChanged },
   ], [onCellValueChanged]);
 
-  const ownedOptionCols = useMemo<ColDef<OwnedOptionRow>[]>(() => [
-    { field: 'ticker',           headerName: 'Symbol',  width: 105, pinned: 'left', cellRenderer: OptionTickerCell },
-    { field: 'type',             headerName: 'Type',    width: 80,  cellRenderer: OptionTypeCell },
-    { field: 'strike',           headerName: 'Strike',  width: 85,  valueFormatter: p => `$${p.value}` },
-    { field: 'expiration',       headerName: 'Expiry',  width: 110 },
-    { field: 'daysToExpiration', headerName: 'DTE',     width: 60 },
-    { field: 'contracts',        headerName: 'Qty',         width: 55 },
-    { field: 'currentMid',       headerName: 'Current Mid', width: 105, cellRenderer: OptMidCell },
-    { field: 'premiumPaid',      headerName: 'Paid',        width: 80,  valueFormatter: p => `$${fmt2(p.value)}` },
-    { field: 'gainDollar',       headerName: 'Gain $',  width: 105, cellRenderer: OptGainDollarCell },
-    { field: 'gainPct',          headerName: 'Gain %',  width: 85,  cellRenderer: OptGainPctCell },
-    { field: 'notes',            headerName: 'Notes',   flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },
+  const optionCols = useMemo<ColDef<OptionRow>[]>(() => [
+    { field: 'ticker',           headerName: 'Symbol',      width: 118, pinned: 'left', cellRenderer: OptionTickerCell },
+    { field: 'type',             headerName: 'Type',        width: 78,  cellRenderer: OptionTypeCell },
+    { field: 'strike',           headerName: 'Strike',      width: 80,  valueFormatter: p => `$${p.value}` },
+    { field: 'expiration',       headerName: 'Expiry',      width: 105 },
+    { field: 'daysToExpiration', headerName: 'DTE',         width: 55 },
+    { field: 'contracts',        headerName: 'Qty',         width: 58,  editable: true, cellStyle: ec, valueParser: p => Number(p.newValue), onCellValueChanged: onOptionCellValueChanged },
+    { field: 'premiumPaid',      headerName: 'Premium',     width: 88,
+      editable: p => !(p.data?.isWatchlist ?? true),
+      cellStyle: p => p.data?.isWatchlist ? {} : ec,
+      valueFormatter: p => (!p.data || p.data.isWatchlist || !p.value) ? '—' : `$${fmt2(p.value)}`,
+      valueParser: p => Number(p.newValue), onCellValueChanged: onOptionCellValueChanged },
+    { field: 'currentMid',       headerName: 'Mid',         width: 88,  cellRenderer: OptMidCell },
+    { field: 'gainDollar',       headerName: 'Gain $',      width: 100, cellRenderer: OptGainDollarCell },
+    { field: 'gainPct',          headerName: 'Gain %',      width: 80,  cellRenderer: OptGainPctCell },
+    { field: 'underlyingPrice',  headerName: 'Stock $',     width: 82,  valueFormatter: p => p.value > 0 ? `$${fmt2(p.value)}` : '—', cellStyle: { color: '#94a3b8' } },
+    { field: 'iv30',             headerName: 'IV30',        width: 70,  cellRenderer: VolCell },
+    { field: 'hv30',             headerName: 'HV30',        width: 70,  cellRenderer: VolCell },
+    { field: 'ivhvRatio',        headerName: 'IV/HV',       width: 72,  cellRenderer: IvHvCell },
+    { field: 'savedPrice',       headerName: 'Saved Mid',   width: 95,
+      valueFormatter: p => (p.value != null && p.value > 0 && p.data?.isWatchlist) ? `$${fmt2(p.value)}` : '—',
+      cellStyle: { color: '#64748b' } },
+    { field: 'targetOptionMid',  headerName: 'Target Mid',  width: 115, cellRenderer: TargetMidCell,
+      editable: p => p.data?.isWatchlist ?? false,
+      cellStyle: p => p.data?.isWatchlist ? ec : {},
+      valueParser: p => Number(p.newValue), onCellValueChanged: onOptionCellValueChanged },
+    { field: 'notes',            headerName: 'Notes',       flex: 1, minWidth: 80, editable: true, cellStyle: { ...ec, color: '#64748b', fontSize: '12px' }, onCellValueChanged: onOptionCellValueChanged },
     { headerName: '', width: 40, sortable: false, resizable: false, cellRenderer: DeleteOptionCell },
-  ], []);
-
-  const watchedOptionCols = useMemo<ColDef<WatchedOptionRow>[]>(() => [
-    { field: 'ticker',          headerName: 'Symbol',       width: 105, pinned: 'left', cellRenderer: OptionTickerCell },
-    { field: 'type',            headerName: 'Type',         width: 80,  cellRenderer: OptionTypeCell },
-    { field: 'strike',          headerName: 'Strike',       width: 85,  valueFormatter: p => `$${p.value}` },
-    { field: 'expiration',      headerName: 'Expiry',       width: 110 },
-    { field: 'daysToExpiration',headerName: 'DTE',          width: 60 },
-    { field: 'underlyingPrice', headerName: 'Stock $',      width: 90,  valueFormatter: p => p.value > 0 ? `$${fmt2(p.value)}` : '—', cellStyle: { color: '#94a3b8' } },
-    { field: 'iv30',            headerName: 'IV30',         width: 80,  cellRenderer: VolCell },
-    { field: 'hv30',            headerName: 'HV30',         width: 80,  cellRenderer: VolCell },
-    { field: 'ivhvRatio',       headerName: 'IV/HV',        width: 80,  cellRenderer: IvHvCell },
-    { field: 'currentMid',      headerName: 'Current Mid',  width: 110, cellRenderer: OptMidCell },
-    { field: 'savedPrice',      headerName: 'Saved Mid',    width: 105, valueFormatter: p => p.value > 0 ? `$${fmt2(p.value)}` : '—', cellStyle: { color: '#64748b' } },
-    { field: 'targetOptionMid', headerName: 'Target Mid',   width: 120, cellRenderer: TargetMidCell },
-    { field: 'notes',           headerName: 'Notes',        flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },
-    { headerName: '', width: 40, sortable: false, resizable: false, cellRenderer: DeleteOptionCell },
-  ], []);
+  ], [onOptionCellValueChanged]);
 
   if (loading && !holdings) return <div className="flex items-center justify-center h-full text-slate-400">Loading…</div>;
   if (!holdings) return <div className="flex items-center justify-center h-full text-slate-400">No holdings</div>;
 
   const ROW_H = 44;
   const HDR_H = 34;
-  const stockGridH         = HDR_H + stockRows.length * 48 + 48;
-  const ownedOptGridH      = HDR_H + ownedOptionRows.length * ROW_H;
-  const watchedOptGridH    = HDR_H + watchedOptionRows.length * ROW_H;
-  const hasOwnedOptions    = ownedOptionRows.length > 0;
-  const hasWatchedOptions  = watchedOptionRows.length > 0;
-  const existingTickers    = Object.keys(holdings.stocks);
+  const stockGridH   = HDR_H + stockRows.length * 48 + 48;
+  const optionGridH  = HDR_H + optionRows.length * ROW_H;
+  const hasOptions   = optionRows.length > 0;
+  const existingTickers = Object.keys(holdings.stocks);
 
   const stockCtx = { openOptions: setOptionChainTicker, deleteStock: handleDeleteStock };
   const optCtx   = { deleteOption: handleDeleteOption };
@@ -538,33 +693,20 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
           />
         </div>
 
-        {/* ── Owned Options ── */}
-        {hasOwnedOptions && (
-          <div className="border-t border-slate-700/50">
-            <SectionLabel>Options — Owned</SectionLabel>
-            <div style={{ height: ownedOptGridH }}>
-              <AgGridReact<OwnedOptionRow>
-                theme={darkTheme} rowData={ownedOptionRows} columnDefs={ownedOptionCols}
+        {/* ── Options ── */}
+        <div className="border-t border-slate-700/50">
+          <SectionLabel onAdd={() => setShowAddOptionModal(true)}>Options</SectionLabel>
+          {hasOptions && (
+            <div style={{ height: optionGridH }}>
+              <AgGridReact<OptionRow>
+                theme={darkTheme} rowData={optionRows} columnDefs={optionCols}
                 defaultColDef={defaultColDef} rowHeight={ROW_H} headerHeight={HDR_H}
                 context={optCtx}
+                getRowStyle={p => p.data?.isWatchlist ? { color: '#64748b' } : undefined}
               />
             </div>
-          </div>
-        )}
-
-        {/* ── Watched Options ── */}
-        {hasWatchedOptions && (
-          <div className="border-t border-slate-700/50">
-            <SectionLabel>Options — Watching</SectionLabel>
-            <div style={{ height: watchedOptGridH }}>
-              <AgGridReact<WatchedOptionRow>
-                theme={darkTheme} rowData={watchedOptionRows} columnDefs={watchedOptionCols}
-                defaultColDef={defaultColDef} rowHeight={ROW_H} headerHeight={HDR_H}
-                context={optCtx}
-              />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
       </div>
 
@@ -573,15 +715,29 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
       </div>
 
       {showAddModal && <AddStockModal existingTickers={existingTickers} onAdd={handleAddStock} onClose={() => setShowAddModal(false)} />}
-
-      {optionChainTicker && (
-        <OptionChainModal
-          ticker={optionChainTicker}
-          currentPrice={priceMap.get(optionChainTicker)?.price ?? 0}
-          onClose={() => setOptionChainTicker(null)}
-          onWatchAdded={handleAddOptionWatch}
+      {showAddOptionModal && (
+        <AddOptionModal
+          existingKeys={Object.keys(holdings.options)}
+          onAddOwned={handleAddOptionWatch}
+          onAddWatch={handleAddOptionWatchPost}
+          onClose={() => setShowAddOptionModal(false)}
         />
       )}
+
+      {optionChainTicker && (() => {
+        const ownedKeys   = new Set(Object.entries(holdings.options).filter(([,o]) => o.contracts > 0).map(([k]) => k));
+        const watchedKeys = new Set(Object.entries(holdings.options).filter(([,o]) => o.contracts === 0).map(([k]) => k));
+        return (
+          <OptionChainModal
+            ticker={optionChainTicker}
+            currentPrice={priceMap.get(optionChainTicker)?.price ?? 0}
+            onClose={() => setOptionChainTicker(null)}
+            onWatchAdded={handleAddOptionWatch}
+            ownedKeys={ownedKeys}
+            watchedKeys={watchedKeys}
+          />
+        );
+      })()}
     </div>
   );
 }
