@@ -265,7 +265,7 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
   const [watchForm, setWatchForm] = useState<WatchForm | null>(null);
   const targetRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { if (watchForm) targetRef.current?.focus(); }, [watchForm]);
+  useEffect(() => { if (watchForm) targetRef.current?.focus(); }, [watchForm?.contract.contractSymbol]);
 
   function set<K extends keyof typeof filters>(key: K, val: typeof filters[K]) {
     setFilters(f => ({ ...f, [key]: val }));
