@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { Message, OptionSuggestion } from '../types';
 
 interface Props {
   message: Message;
   onWatchOption?: (s: OptionSuggestion) => Promise<void>;
+  onViewChain?: (s: OptionSuggestion) => void;
 }
 
 function fmtExpiry(d: string) {
@@ -12,9 +14,10 @@ function fmtExpiry(d: string) {
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
-function OptionSuggestionCard({ suggestion, onWatch }: {
+function OptionSuggestionCard({ suggestion, onWatch, onViewChain }: {
   suggestion: OptionSuggestion;
   onWatch?: (s: OptionSuggestion) => Promise<void>;
+  onViewChain?: (s: OptionSuggestion) => void;
 }) {
   const [state, setState] = useState<'idle' | 'loading' | 'added'>('idle');
 
@@ -48,6 +51,15 @@ function OptionSuggestionCard({ suggestion, onWatch }: {
           <div className="text-[10px] text-slate-400 truncate mt-0.5">{suggestion.notes}</div>
         )}
       </div>
+      {onViewChain && (
+        <button
+          onClick={() => onViewChain(suggestion)}
+          className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-all flex-shrink-0 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/25 hover:border-purple-500/40 cursor-pointer"
+          title="View in option chain"
+        >
+          Chain
+        </button>
+      )}
       <button
         onClick={handleWatch}
         disabled={state !== 'idle'}
@@ -65,7 +77,7 @@ function OptionSuggestionCard({ suggestion, onWatch }: {
   );
 }
 
-export function ChatMessage({ message, onWatchOption }: Props) {
+export function ChatMessage({ message, onWatchOption, onViewChain }: Props) {
   const isUser = message.role === 'user';
 
   if (isUser) {
@@ -104,8 +116,13 @@ export function ChatMessage({ message, onWatchOption }: Props) {
             prose-code:text-emerald-300 prose-code:bg-slate-900 prose-code:px-1 prose-code:rounded prose-code:text-xs
             prose-pre:bg-slate-900 prose-pre:rounded prose-pre:p-3 prose-pre:text-xs prose-pre:overflow-x-auto
             prose-blockquote:border-l-2 prose-blockquote:border-slate-500 prose-blockquote:pl-3 prose-blockquote:text-slate-400
-            prose-hr:border-slate-600">
-            <Markdown>{message.content || (message.streaming ? '▍' : '')}</Markdown>
+            prose-hr:border-slate-600
+            prose-table:text-xs prose-table:w-full
+            prose-thead:border-b prose-thead:border-slate-600
+            prose-th:text-slate-300 prose-th:font-semibold prose-th:py-1.5 prose-th:px-2 prose-th:text-left
+            prose-td:py-1 prose-td:px-2 prose-td:border-b prose-td:border-slate-700/50
+            prose-tr:transition-colors">
+            <Markdown remarkPlugins={[remarkGfm]}>{message.content || (message.streaming ? '▍' : '')}</Markdown>
           </div>
         </div>
         {message.streaming && (
@@ -121,7 +138,7 @@ export function ChatMessage({ message, onWatchOption }: Props) {
               Suggested options
             </div>
             {message.optionSuggestions.map((s, i) => (
-              <OptionSuggestionCard key={i} suggestion={s} onWatch={onWatchOption} />
+              <OptionSuggestionCard key={i} suggestion={s} onWatch={onWatchOption} onViewChain={onViewChain} />
             ))}
           </div>
         )}

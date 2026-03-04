@@ -139,7 +139,8 @@ export async function getAllPrices(holdings: {
   stocks: Record<string, unknown>;
   options: Record<string, { ticker: string; strike: number; expiration: string; type: string; contracts?: number }>;
 }): Promise<{ stocks: StockQuote[]; options: OptionsData[]; volatility: Record<string, VolatilityData> }> {
-  const stockTickers = Object.keys(holdings.stocks);
+  const SPECIAL_KEYS = new Set(['$CASH', '$OTHER']);
+  const stockTickers = Object.keys(holdings.stocks).filter(t => !SPECIAL_KEYS.has(t));
   const optionEntries = Object.entries(holdings.options);
   const optionTickers = [...new Set(optionEntries.map(([, o]) => o.ticker))];
   const allTickers = [...new Set([...stockTickers, ...optionTickers])];

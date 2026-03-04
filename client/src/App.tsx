@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AIProvider, Holdings, PricesResponse, AccountMeta } from './types';
+import type { AIProvider, Holdings, PricesResponse, AccountMeta, OptionSuggestion } from './types';
 import { DEFAULT_MODEL } from './types';
 import { SettingsBar } from './components/SettingsBar';
 import { HoldingsPanel } from './components/HoldingsPanel';
@@ -29,6 +29,24 @@ export default function App() {
   // Account state
   const [accounts, setAccounts] = useState<AccountMeta[]>([]);
   const [activeAccount, setActiveAccount] = useState<AccountMeta | null>(null);
+
+  // Option chain + AI highlights state
+  const [optionChainTicker, setOptionChainTicker] = useState<string | null>(null);
+  const [aiHighlights, setAiHighlights] = useState<OptionSuggestion[]>([]);
+  const [chainInitialExpiry, setChainInitialExpiry] = useState<string | null>(null);
+
+  const handleOpenChain = useCallback((ticker: string, highlights: OptionSuggestion[]) => {
+    setOptionChainTicker(ticker);
+    setAiHighlights(highlights);
+    setChainInitialExpiry(null);
+  }, []);
+
+  const handleOptionChainChange = useCallback((ticker: string | null, expiry?: string) => {
+    setOptionChainTicker(ticker);
+    setChainInitialExpiry(expiry ?? null);
+    if (ticker === null) setAiHighlights([]);
+    else setAiHighlights([]);
+  }, []);
 
   // Resizable split pane
   const [splitPct, setSplitPct] = useState(62); // holdings gets 62% by default
@@ -176,9 +194,6 @@ export default function App() {
         onProviderChange={handleProviderChange}
         model={model}
         onModelChange={setModel}
-        onRefreshPrices={fetchPrices}
-        pricesLoading={pricesLoading}
-        lastRefreshed={lastRefreshed}
         accounts={accounts}
         activeAccount={activeAccount}
         onSwitchAccount={switchAccount}
@@ -188,7 +203,11 @@ export default function App() {
       <div ref={containerRef} className="flex flex-1 overflow-hidden">
         {/* Holdings pane */}
         <div style={{ width: `${splitPct}%` }} className="flex flex-col overflow-hidden border-r border-slate-800">
-          <HoldingsPanel holdings={holdings} prices={prices} loading={pricesLoading && !prices} onHoldingsUpdated={handleHoldingsUpdated} />
+          <HoldingsPanel
+            holdings={holdings} prices={prices} loading={pricesLoading && !prices} onHoldingsUpdated={handleHoldingsUpdated}
+            optionChainTicker={optionChainTicker} onOptionChainChange={handleOptionChainChange} aiHighlights={aiHighlights} chainInitialExpiry={chainInitialExpiry}
+            onRefreshPrices={fetchPrices} pricesLoading={pricesLoading} lastRefreshed={lastRefreshed}
+          />
         </div>
 
         {/* Drag handle */}
@@ -229,6 +248,7 @@ export default function App() {
                 strategy={strategy}
                 onHoldingsUpdated={handleHoldingsUpdated}
                 onStrategyUpdated={handleStrategyUpdated}
+                onOpenChain={handleOpenChain}
               />
             </div>
             {rightTab === 'strategy' && (

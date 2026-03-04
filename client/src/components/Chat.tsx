@@ -11,6 +11,7 @@ interface Props {
   strategy: string;
   onHoldingsUpdated: () => void;
   onStrategyUpdated: () => void;
+  onOpenChain?: (ticker: string, highlights: OptionSuggestion[]) => void;
 }
 
 const FILE_UPDATE_RE = /<<<FILE_UPDATE>>>([\s\S]*?)<<<END_FILE_UPDATE>>>/;
@@ -38,7 +39,7 @@ function extractOptionSuggestions(text: string): { clean: string; suggestions: O
   return { clean, suggestions };
 }
 
-export function Chat({ provider, model, providerKeys, holdings, strategy, onHoldingsUpdated, onStrategyUpdated }: Props) {
+export function Chat({ provider, model, providerKeys, holdings, strategy, onHoldingsUpdated, onStrategyUpdated, onOpenChain }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -159,6 +160,11 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
             : m
         )
       );
+
+      // Auto-open option chain with AI suggestions highlighted
+      if (suggestions.length > 0 && onOpenChain) {
+        onOpenChain(suggestions[0].ticker, suggestions);
+      }
 
       if (update) {
         setPendingUpdate(update);
@@ -315,7 +321,7 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 pt-4 pb-2">
         {messages.map((msg) => (
-          <ChatMessage key={msg.id} message={msg} onWatchOption={handleWatchOption} />
+          <ChatMessage key={msg.id} message={msg} onWatchOption={handleWatchOption} onViewChain={onOpenChain ? (s) => onOpenChain(s.ticker, [s]) : undefined} />
         ))}
         <div ref={bottomRef} />
       </div>

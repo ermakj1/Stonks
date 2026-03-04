@@ -7,9 +7,6 @@ interface Props {
   onProviderChange: (p: AIProvider) => void;
   model: string;
   onModelChange: (m: string) => void;
-  onRefreshPrices: () => void;
-  pricesLoading: boolean;
-  lastRefreshed: Date | null;
   accounts: AccountMeta[];
   activeAccount: AccountMeta | null;
   onSwitchAccount: (id: string) => void;
@@ -21,18 +18,11 @@ export function SettingsBar({
   onProviderChange,
   model,
   onModelChange,
-  onRefreshPrices,
-  pricesLoading,
-  lastRefreshed,
   accounts,
   activeAccount,
   onSwitchAccount,
   onCreateAccount,
 }: Props) {
-  const timeLabel = lastRefreshed
-    ? lastRefreshed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })
-    : null;
-
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [showNewInput, setShowNewInput] = useState(false);
   const [newName, setNewName] = useState('');
@@ -190,24 +180,6 @@ export function SettingsBar({
           )}
         </div>
 
-        {/* Refresh section */}
-        <div className="flex items-center gap-2">
-          {timeLabel && (
-            <span className="text-slate-500 text-xs tabular-nums">
-              Updated {timeLabel}
-            </span>
-          )}
-          <button
-            onClick={onRefreshPrices}
-            disabled={pricesLoading}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-sm font-semibold rounded-lg px-4 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-md shadow-emerald-900/40"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className={`flex-shrink-0 ${pricesLoading ? 'animate-spin' : ''}`}>
-              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-            </svg>
-            {pricesLoading ? 'Updating…' : 'Refresh Prices'}
-          </button>
-        </div>
       </div>
     </div>
   );

@@ -6,8 +6,9 @@ import {
   themeBalham,
   type ColDef,
   type CellValueChangedEvent,
+  type GridApi,
 } from 'ag-grid-community';
-import type { Holdings, PricesResponse, OptionEntry, VolatilityData } from '../types';
+import type { Holdings, PricesResponse, OptionEntry, VolatilityData, OptionSuggestion } from '../types';
 import { OptionChainModal } from './OptionChainModal';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -44,6 +45,39 @@ function dteFromExpiry(expiry: string): number {
   return Math.max(0, Math.round((ts - Date.now() / 1000) / 86400));
 }
 
+const STOCK_COL_META = [
+  { field: 'shares',       headerName: 'Shares' },
+  { field: 'costBasis',    headerName: 'Cost/Share' },
+  { field: 'price',        headerName: 'Last Price' },
+  { field: 'dayChangePct', headerName: 'Day %' },
+  { field: 'marketValue',  headerName: 'Mkt Value' },
+  { field: 'gainDollar',   headerName: 'Gain $' },
+  { field: 'gainPct',      headerName: 'Gain %' },
+  { field: 'actualPct',    headerName: 'Actual %' },
+  { field: 'targetPct',    headerName: 'Target %' },
+  { field: 'targetValue',  headerName: 'Target $' },
+  { field: 'notes',        headerName: 'Notes' },
+];
+
+const OPTION_COL_META = [
+  { field: 'type',             headerName: 'Type' },
+  { field: 'strike',           headerName: 'Strike' },
+  { field: 'expiration',       headerName: 'Expiry' },
+  { field: 'daysToExpiration', headerName: 'DTE' },
+  { field: 'contracts',        headerName: 'Qty' },
+  { field: 'premiumPaid',      headerName: 'Premium' },
+  { field: 'currentMid',       headerName: 'Mid' },
+  { field: 'gainDollar',       headerName: 'Gain $' },
+  { field: 'gainPct',          headerName: 'Gain %' },
+  { field: 'underlyingPrice',  headerName: 'Stock $' },
+  { field: 'iv30',             headerName: 'IV30' },
+  { field: 'hv30',             headerName: 'HV30' },
+  { field: 'ivhvRatio',        headerName: 'IV/HV' },
+  { field: 'savedPrice',       headerName: 'Saved Mid' },
+  { field: 'targetOptionMid',  headerName: 'Target Mid' },
+  { field: 'notes',            headerName: 'Notes' },
+];
+
 // ── cell renderers ───────────────────────────────────────────────────
 
 type StockCtx = { openOptions: (t: string) => void; deleteStock: (t: string) => void };
@@ -70,6 +104,30 @@ function TickerCell(p: { value: string; data: StockRow; context: StockCtx }) {
     background: 'none', border: 'none', padding: '2px 4px', cursor: 'pointer',
     borderRadius: 4, lineHeight: 1, display: 'flex', alignItems: 'center',
   };
+  const isCash  = p.value === '$CASH';
+  const isOther = p.value === '$OTHER';
+  const label   = isCash ? 'Cash' : isOther ? 'Other Stocks' : p.value;
+  const badgeColor = isCash ? '#60a5fa' : isOther ? '#a78bfa' : null;
+
+  if (isCash || isOther) {
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: `${badgeColor}20`, border: `1px solid ${badgeColor}40`, color: badgeColor!, letterSpacing: '0.05em', textTransform: 'uppercase', flexShrink: 0 }}>
+          {isCash ? 'cash' : 'other'}
+        </span>
+        <span style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13 }}>{label}</span>
+        <button onClick={e => { e.stopPropagation(); p.context.deleteStock(p.value); }} title="Remove"
+          style={{ ...btnBase, color: '#334155', marginLeft: 2 }}
+          onMouseEnter={e => (e.currentTarget.style.color = '#f87171')}
+          onMouseLeave={e => (e.currentTarget.style.color = '#334155')}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </span>
+    );
+  }
+
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
       <span style={{ fontWeight: 700, color: p.data.shares === 0 ? '#64748b' : '#fff', fontSize: 14 }}>
@@ -236,7 +294,8 @@ function DeleteOptionCell(p: { data: OptionRow; context: OptCtx }) {
 interface StockRow {
   ticker: string; shares: number; costBasis: number; price: number;
   dayChangePct: number; marketValue: number; gainDollar: number; gainPct: number;
-  actualPct: number; targetPct: number; notes: string; isSummary?: boolean;
+  actualPct: number; targetPct: number; targetValue: number; notes: string; isSummary?: boolean;
+  isSpecial?: boolean; // $CASH or $OTHER rows
 }
 interface OptionRow {
   key: string; ticker: string; type: string; strike: number; expiration: string;
@@ -357,6 +416,7 @@ interface AddOptionModalProps {
 function AddOptionModal({ existingKeys, onAddOwned, onAddWatch, onClose }: AddOptionModalProps) {
   const [ticker, setTicker]         = useState('');
   const [optType, setOptType]       = useState<'call' | 'put'>('call');
+  const [direction, setDirection]   = useState<'long' | 'short'>('long');
   const [strike, setStrike]         = useState('');
   const [expiration, setExpiration] = useState('');
   const [contracts, setContracts]   = useState('0');
@@ -368,7 +428,9 @@ function AddOptionModal({ existingKeys, onAddOwned, onAddWatch, onClose }: AddOp
 
   useEffect(() => { tickerRef.current?.focus(); }, []);
 
-  const isOwned = Number(contracts) > 0;
+  const qty = Math.abs(Number(contracts));
+  const isOwned = qty > 0;
+  const finalContracts = direction === 'short' ? -qty : qty;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -383,7 +445,7 @@ function AddOptionModal({ existingKeys, onAddOwned, onAddWatch, onClose }: AddOp
       if (isOwned) {
         const entry: OptionEntry = {
           ticker: t, type: optType, strike: Number(strike),
-          expiration, contracts: Number(contracts),
+          expiration, contracts: finalContracts,
           premium_paid: Number(premium) || 0,
           notes: notes.trim(),
         };
@@ -430,6 +492,21 @@ function AddOptionModal({ existingKeys, onAddOwned, onAddWatch, onClose }: AddOp
               </div>
             </div>
           </div>
+          <div>
+            <label style={lbl}>Direction</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {(['long', 'short'] as const).map(d => (
+                <button key={d} type="button" onClick={() => setDirection(d)}
+                  style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: '1px solid', cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                    borderColor: direction === d ? (d === 'long' ? '#10b981' : '#f59e0b') : '#334155',
+                    background: direction === d ? (d === 'long' ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)') : 'none',
+                    color: direction === d ? (d === 'long' ? '#34d399' : '#fbbf24') : '#94a3b8',
+                  }}>
+                  {d === 'long' ? 'Long (bought)' : 'Short (sold)'}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={lbl}>Strike *</label>
@@ -450,7 +527,7 @@ function AddOptionModal({ existingKeys, onAddOwned, onAddWatch, onClose }: AddOp
               <span style={{ fontSize: 10, color: '#475569', marginTop: 2, display: 'block' }}>0 = watchlist only</span>
             </div>
             <div style={{ opacity: isOwned ? 1 : 0.4 }}>
-              <label style={lbl}>Premium Paid</label>
+              <label style={lbl}>{direction === 'short' ? 'Premium Received' : 'Premium Paid'}</label>
               <input style={inp} type="number" min="0" step="any" value={premium}
                 disabled={!isOwned} onChange={e => setPremium(e.target.value)} placeholder="per contract" />
             </div>
@@ -464,7 +541,7 @@ function AddOptionModal({ existingKeys, onAddOwned, onAddWatch, onClose }: AddOp
         <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
           <button type="button" onClick={onClose} style={{ padding: '7px 16px', borderRadius: 7, border: '1px solid #334155', background: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
           <button type="submit" disabled={saving} style={{ padding: '7px 16px', borderRadius: 7, border: 'none', background: '#059669', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: 13, opacity: saving ? 0.7 : 1 }}>
-            {saving ? 'Adding…' : isOwned ? 'Add Owned' : 'Add to Watchlist'}
+            {saving ? 'Adding…' : isOwned ? (direction === 'short' ? 'Add Short' : 'Add Long') : 'Add to Watchlist'}
           </button>
         </div>
       </form>
@@ -479,20 +556,101 @@ interface Props {
   prices: PricesResponse | null;
   loading: boolean;
   onHoldingsUpdated?: () => void;
+  optionChainTicker: string | null;
+  onOptionChainChange: (ticker: string | null, expiry?: string) => void;
+  aiHighlights?: OptionSuggestion[];
+  chainInitialExpiry?: string | null;
+  onRefreshPrices: () => void;
+  pricesLoading: boolean;
+  lastRefreshed: Date | null;
 }
 
-export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: Props) {
-  const [optionChainTicker, setOptionChainTicker] = useState<string | null>(null);
+export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, optionChainTicker, onOptionChainChange, aiHighlights, chainInitialExpiry, onRefreshPrices, pricesLoading, lastRefreshed }: Props) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAddOptionModal, setShowAddOptionModal] = useState(false);
+  const [showAddStockMenu, setShowAddStockMenu] = useState(false);
+  const [stocksCollapsed, setStocksCollapsed] = useState(false);
+  const [optionsCollapsed, setOptionsCollapsed] = useState(false);
+  const addStockMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showAddStockMenu) return;
+    function close(e: MouseEvent) { if (addStockMenuRef.current && !addStockMenuRef.current.contains(e.target as Node)) setShowAddStockMenu(false); }
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [showAddStockMenu]);
+
+  const stockGridApi = useRef<GridApi | null>(null);
+  const optionGridApi = useRef<GridApi | null>(null);
+  const [hiddenStockCols, setHiddenStockCols] = useState<Set<string>>(new Set());
+  const [hiddenOptionCols, setHiddenOptionCols] = useState<Set<string>>(new Set());
+  const toggleStockCol = useCallback((field: string) => {
+    setHiddenStockCols(prev => {
+      const nowHidden = prev.has(field);
+      const next = new Set(prev);
+      if (nowHidden) next.delete(field); else next.add(field);
+      stockGridApi.current?.setColumnsVisible([field], nowHidden);
+      return next;
+    });
+  }, []);
+  const toggleOptionCol = useCallback((field: string) => {
+    setHiddenOptionCols(prev => {
+      const nowHidden = prev.has(field);
+      const next = new Set(prev);
+      if (nowHidden) next.delete(field); else next.add(field);
+      optionGridApi.current?.setColumnsVisible([field], nowHidden);
+      return next;
+    });
+  }, []);
+
+  const chainRef = useRef<HTMLDivElement>(null);
+
+  // Resizable vertical split: stocks top, options+chain bottom
+  const [splitPct, setSplitPct] = useState(50);
+  const vDragging = useRef(false);
+  const vContainerRef = useRef<HTMLDivElement>(null);
+  const onVMouseDown = useCallback(() => { vDragging.current = true; }, []);
+  const onVMouseMove = useCallback((e: MouseEvent) => {
+    if (!vDragging.current || !vContainerRef.current) return;
+    const rect = vContainerRef.current.getBoundingClientRect();
+    const pct = ((e.clientY - rect.top) / rect.height) * 100;
+    setSplitPct(Math.min(80, Math.max(20, pct)));
+  }, []);
+  const onVMouseUp = useCallback(() => { vDragging.current = false; }, []);
+
+  useEffect(() => {
+    window.addEventListener('mousemove', onVMouseMove);
+    window.addEventListener('mouseup', onVMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onVMouseMove);
+      window.removeEventListener('mouseup', onVMouseUp);
+    };
+  }, [onVMouseMove, onVMouseUp]);
+
+  // Auto-scroll to option chain when it opens
+  useEffect(() => {
+    if (optionChainTicker && chainRef.current) {
+      setTimeout(() => chainRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    }
+  }, [optionChainTicker]);
 
   const priceMap = useMemo(() => new Map(prices?.stocks.map(s => [s.ticker, s]) ?? []), [prices]);
   const optionPriceMap = useMemo(() => new Map(prices?.options.map(o => [o.key, o]) ?? []), [prices]);
 
   // ── stock rows ───────────────────────────────────────────────────
-  const baseRows = useMemo<Omit<StockRow, 'actualPct'>[]>(() => {
+  const baseRows = useMemo<Omit<StockRow, 'actualPct' | 'targetValue'>[]>(() => {
     if (!holdings) return [];
     return Object.entries(holdings.stocks).map(([ticker, s]) => {
+      const isCash  = ticker === '$CASH';
+      const isOther = ticker === '$OTHER';
+      const isSpecial = isCash || isOther;
+      if (isSpecial) {
+        // shares = current value, cost_basis = total cost
+        const marketValue = s.shares;
+        const cost = s.cost_basis;
+        const gainDollar = isCash ? 0 : marketValue - cost;
+        const gainPct = isCash ? 0 : (cost > 0 ? (gainDollar / cost) * 100 : 0);
+        return { ticker, shares: s.shares, costBasis: s.cost_basis, price: 0, dayChangePct: 0, marketValue, gainDollar, gainPct, targetPct: s.target_allocation_pct, notes: s.notes, isSpecial: true };
+      }
       const q = priceMap.get(ticker);
       const price = q?.price ?? 0;
       const marketValue = price * s.shares;
@@ -504,9 +662,13 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
   }, [holdings, priceMap]);
 
   const totalValue = baseRows.reduce((s, r) => s + r.marketValue, 0);
-  const stockRows = useMemo<StockRow[]>(() => baseRows.map(r => ({ ...r, actualPct: totalValue > 0 ? (r.marketValue / totalValue) * 100 : 0 })), [baseRows, totalValue]);
+  const stockRows = useMemo<StockRow[]>(() => baseRows.map(r => ({
+    ...r,
+    actualPct: totalValue > 0 ? (r.marketValue / totalValue) * 100 : 0,
+    targetValue: totalValue > 0 ? (r.targetPct / 100) * totalValue : 0,
+  })), [baseRows, totalValue]);
 
-  const totalCost = stockRows.reduce((s, r) => s + r.costBasis * r.shares, 0);
+  const totalCost = stockRows.reduce((s, r) => s + (r.isSpecial ? r.costBasis : r.costBasis * r.shares), 0);
   const totalGain = totalValue - totalCost;
   const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
   const totalDayChange = stockRows.reduce((s, r) => s + (r.price > 0 && r.shares > 0 ? (r.dayChangePct / 100) * r.marketValue : 0), 0);
@@ -517,6 +679,7 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     dayChangePct: weightedDayChangePct, marketValue: totalValue,
     gainDollar: totalGain, gainPct: totalGainPct, actualPct: 100,
     targetPct: stockRows.reduce((s, r) => s + r.targetPct, 0),
+    targetValue: stockRows.reduce((s, r) => s + r.targetValue, 0),
     notes: '', isSummary: true,
   };
 
@@ -525,11 +688,17 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
     if (!holdings) return [];
     return Object.entries(holdings.options).map(([key, o]) => {
       const isWatchlist = o.contracts === 0;
+      const isShort = o.contracts < 0;
       const currentMid = optionPriceMap.get(key)?.mid ?? null;
       const vol: VolatilityData | undefined = prices?.volatility?.[o.ticker];
-      const optionCost = o.premium_paid * o.contracts * 100;
+      const absContracts = Math.abs(o.contracts);
+      const optionCost = o.premium_paid * absContracts * 100;
+      // Short: gain = (premium_received - current_mid) * contracts * 100
+      // Long:  gain = (current_mid - premium_paid) * contracts * 100
       const gainDollar = !isWatchlist && currentMid != null && optionCost > 0
-        ? (currentMid - o.premium_paid) * o.contracts * 100
+        ? isShort
+          ? (o.premium_paid - currentMid) * absContracts * 100
+          : (currentMid - o.premium_paid) * absContracts * 100
         : null;
       const gainPct = gainDollar != null && optionCost > 0
         ? (gainDollar / optionCost) * 100
@@ -560,9 +729,18 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
 
   const onCellValueChanged = useCallback(async (e: CellValueChangedEvent<StockRow>) => {
     if (!holdings || e.data.isSummary) return;
-    const { ticker, shares, costBasis, targetPct, notes } = e.data;
-    const updated: Holdings = { ...holdings, stocks: { ...holdings.stocks, [ticker]: { ...holdings.stocks[ticker], shares: Number(shares), cost_basis: Number(costBasis), target_allocation_pct: Number(targetPct), notes: String(notes ?? '') } } };
+    const { ticker, shares, costBasis, notes } = e.data;
+    // If targetValue was edited, derive targetPct from it; otherwise use existing targetPct
+    const targetPct = e.column.getColId() === 'targetValue'
+      ? (totalValue > 0 ? (Number(e.newValue) / totalValue) * 100 : 0)
+      : e.data.targetPct;
+    const updated: Holdings = { ...holdings, stocks: { ...holdings.stocks, [ticker]: { ...holdings.stocks[ticker], shares: Number(shares), cost_basis: Number(costBasis), target_allocation_pct: targetPct, notes: String(notes ?? '') } } };
     try { await saveHoldings(updated); } catch (err) { console.error('Failed to save:', err); }
+  }, [holdings, saveHoldings, totalValue]);
+
+  const handleAddSpecial = useCallback(async (key: '$CASH' | '$OTHER') => {
+    if (!holdings || holdings.stocks[key]) return;
+    await saveHoldings({ ...holdings, stocks: { ...holdings.stocks, [key]: { shares: 0, cost_basis: 0, target_allocation_pct: 0, notes: '' } } });
   }, [holdings, saveHoldings]);
 
   const onOptionCellValueChanged = useCallback(async (e: CellValueChangedEvent<OptionRow>) => {
@@ -623,15 +801,31 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
 
   const stockCols = useMemo<ColDef<StockRow>[]>(() => [
     { field: 'ticker',       headerName: 'Symbol',     width: 160, pinned: 'left', cellRenderer: TickerCell },
-    { field: 'shares',       headerName: 'Shares',     width: 95,  editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec, valueFormatter: p => p.data?.isSummary ? '' : p.value?.toLocaleString(), valueParser: p => Number(p.newValue), onCellValueChanged },
-    { field: 'costBasis',    headerName: 'Cost/Share', width: 105, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec, valueFormatter: p => p.data?.isSummary ? '' : `$${fmt2(p.value)}`, valueParser: p => Number(p.newValue), onCellValueChanged },
-    { field: 'price',        headerName: 'Last Price', width: 105, cellRenderer: PriceCell },
-    { field: 'dayChangePct', headerName: 'Day %',      width: 90,  cellRenderer: DayCell },
+    { field: 'shares',       headerName: 'Shares',     width: 105, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec,
+      valueFormatter: p => {
+        if (p.data?.isSummary) return '';
+        if (p.data?.isSpecial) return p.value > 0 ? dollar(p.value) : '$0.00';
+        return p.value?.toLocaleString();
+      },
+      valueParser: p => Number(p.newValue), onCellValueChanged },
+    { field: 'costBasis',    headerName: 'Cost/Share', width: 110, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec,
+      valueFormatter: p => {
+        if (p.data?.isSummary) return '';
+        if (p.data?.ticker === '$CASH') return '—';
+        if (p.data?.isSpecial) return p.value > 0 ? dollar(p.value) : '$0.00';
+        return `$${fmt2(p.value)}`;
+      },
+      valueParser: p => Number(p.newValue), onCellValueChanged },
+    { field: 'price',        headerName: 'Last Price', width: 105, cellRenderer: (p: { value: number; data: StockRow }) => p.data?.isSpecial ? <span style={{ color: '#475569' }}>—</span> : <PriceCell value={p.value} /> },
+    { field: 'dayChangePct', headerName: 'Day %',      width: 90,  cellRenderer: (p: { value: number; data: StockRow }) => p.data?.isSpecial ? <span style={{ color: '#475569' }}>—</span> : <DayCell value={p.value} /> },
     { field: 'marketValue',  headerName: 'Mkt Value',  width: 115, valueFormatter: p => p.value > 0 ? dollar(p.value) : '—' },
-    { field: 'gainDollar',   headerName: 'Gain $',     width: 120, cellRenderer: GainDollarCell },
-    { field: 'gainPct',      headerName: 'Gain %',     width: 90,  cellRenderer: GainPctCell },
+    { field: 'gainDollar',   headerName: 'Gain $',     width: 120, cellRenderer: (p: { value: number; data: StockRow }) => p.data?.ticker === '$CASH' ? <span style={{ color: '#475569' }}>—</span> : <GainDollarCell value={p.value} /> },
+    { field: 'gainPct',      headerName: 'Gain %',     width: 90,  cellRenderer: (p: { value: number; data: StockRow }) => p.data?.ticker === '$CASH' ? <span style={{ color: '#475569' }}>—</span> : <GainPctCell value={p.value} /> },
     { field: 'actualPct',    headerName: 'Actual %',   width: 85,  cellRenderer: AllocPctCell },
     { field: 'targetPct',    headerName: 'Target %',   width: 85,  editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec, cellRenderer: AllocPctCell, valueParser: p => Number(p.newValue), onCellValueChanged },
+    { field: 'targetValue',  headerName: 'Target $',   width: 105, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec,
+      valueFormatter: p => p.value > 0 ? dollar(p.value) : '—',
+      valueParser: p => Number(p.newValue), onCellValueChanged },
     { field: 'notes',        headerName: 'Notes',      flex: 1, minWidth: 80, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : { ...ec, color: '#64748b', fontSize: '12px' }, onCellValueChanged },
   ], [onCellValueChanged]);
 
@@ -675,43 +869,141 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
   const hasOptions   = optionRows.length > 0;
   const existingTickers = Object.keys(holdings.stocks);
 
-  const stockCtx = { openOptions: setOptionChainTicker, deleteStock: handleDeleteStock };
+  const stockCtx = { openOptions: onOptionChainChange, deleteStock: handleDeleteStock };
   const optCtx   = { deleteOption: handleDeleteOption };
 
   return (
     <div className="flex flex-col h-full bg-slate-950">
-      <div className="flex-1 overflow-y-auto">
+      <div ref={vContainerRef} className="flex-1 flex flex-col overflow-hidden">
 
-        {/* ── Stocks ── */}
-        <SectionLabel onAdd={() => setShowAddModal(true)}>Stocks</SectionLabel>
-        <div style={{ height: stockGridH }}>
-          <AgGridReact<StockRow>
-            theme={darkTheme} rowData={stockRows} columnDefs={stockCols} defaultColDef={defaultColDef}
-            rowHeight={48} headerHeight={36} animateRows pinnedBottomRowData={[summaryRow]}
-            context={stockCtx}
-            getRowStyle={p => p.node.rowPinned ? { background: '#1e293b', borderTop: '1px solid #334155' } : undefined}
-          />
-        </div>
-
-        {/* ── Options ── */}
-        <div className="border-t border-slate-700/50">
-          <SectionLabel onAdd={() => setShowAddOptionModal(true)}>Options</SectionLabel>
-          {hasOptions && (
-            <div style={{ height: optionGridH }}>
-              <AgGridReact<OptionRow>
-                theme={darkTheme} rowData={optionRows} columnDefs={optionCols}
-                defaultColDef={defaultColDef} rowHeight={ROW_H} headerHeight={HDR_H}
-                context={optCtx}
-                getRowStyle={p => p.data?.isWatchlist ? { color: '#64748b' } : undefined}
-              />
+        {/* ── Stocks + Options pane ── */}
+        <div style={optionChainTicker ? { height: `${splitPct}%` } : { flex: 1 }} className="flex flex-col overflow-hidden flex-shrink-0">
+          <SectionLabel collapsed={stocksCollapsed} onToggle={() => setStocksCollapsed(v => !v)}
+            addSlot={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div className="relative" ref={addStockMenuRef}>
+                <button
+                  onClick={() => setShowAddStockMenu(v => !v)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(5,150,105,0.15)', border: '1px solid rgba(5,150,105,0.4)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', color: '#34d399', fontSize: 11, fontWeight: 700 }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(5,150,105,0.3)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'rgba(5,150,105,0.15)')}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                  Add ▾
+                </button>
+                {showAddStockMenu && (
+                  <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#1e293b', border: '1px solid #334155', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50, minWidth: 150, overflow: 'hidden' }}>
+                    <button onClick={() => { setShowAddStockMenu(false); setShowAddModal(true); }}
+                      style={{ width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', color: '#e2e8f0', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#334155')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>
+                      Stock
+                    </button>
+                    <div style={{ height: 1, background: '#334155', margin: '0 10px' }} />
+                    <button onClick={() => { setShowAddStockMenu(false); handleAddSpecial('$CASH'); }}
+                      disabled={!!holdings?.stocks['$CASH']}
+                      style={{ width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', color: holdings?.stocks['$CASH'] ? '#475569' : '#60a5fa', fontSize: 12, cursor: holdings?.stocks['$CASH'] ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                      onMouseEnter={e => { if (!holdings?.stocks['$CASH']) e.currentTarget.style.background = '#334155'; }}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+                      <span style={{ fontSize: 11 }}>$</span>
+                      Cash{holdings?.stocks['$CASH'] ? ' (exists)' : ''}
+                    </button>
+                    <button onClick={() => { setShowAddStockMenu(false); handleAddSpecial('$OTHER'); }}
+                      disabled={!!holdings?.stocks['$OTHER']}
+                      style={{ width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', color: holdings?.stocks['$OTHER'] ? '#475569' : '#a78bfa', fontSize: 12, cursor: holdings?.stocks['$OTHER'] ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                      onMouseEnter={e => { if (!holdings?.stocks['$OTHER']) e.currentTarget.style.background = '#334155'; }}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+                      <span style={{ fontSize: 11 }}>≈</span>
+                      Other Stocks{holdings?.stocks['$OTHER'] ? ' (exists)' : ''}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <ColumnChooserButton columns={STOCK_COL_META} hidden={hiddenStockCols} onToggle={toggleStockCol} />
             </div>
-          )}
+            }
+          >Stocks</SectionLabel>
+          <div className="flex-1 overflow-y-auto">
+            {!stocksCollapsed && (
+              <div style={{ height: stockGridH }}>
+                <AgGridReact<StockRow>
+                  theme={darkTheme} rowData={stockRows} columnDefs={stockCols} defaultColDef={defaultColDef}
+                  rowHeight={48} headerHeight={36} animateRows pinnedBottomRowData={[summaryRow]}
+                  context={stockCtx}
+                  getRowStyle={p => p.node.rowPinned ? { background: '#1e293b', borderTop: '1px solid #334155' } : undefined}
+                  onGridReady={e => { stockGridApi.current = e.api; }}
+                />
+              </div>
+            )}
+
+            <div className="border-t border-slate-700/50">
+              <SectionLabel onAdd={() => setShowAddOptionModal(true)} collapsed={optionsCollapsed} onToggle={() => setOptionsCollapsed(v => !v)}
+                addSlot={<ColumnChooserButton columns={OPTION_COL_META} hidden={hiddenOptionCols} onToggle={toggleOptionCol} />}
+              >Options</SectionLabel>
+              {!optionsCollapsed && hasOptions && (
+                <div style={{ height: optionGridH }}>
+                  <AgGridReact<OptionRow>
+                    theme={darkTheme} rowData={optionRows} columnDefs={optionCols}
+                    defaultColDef={defaultColDef} rowHeight={ROW_H} headerHeight={HDR_H}
+                    context={optCtx}
+                    getRowStyle={p => p.data?.isWatchlist ? { color: '#64748b' } : undefined}
+                    onRowClicked={p => { if (p.data) onOptionChainChange(p.data.ticker, p.data.expiration); }}
+                    onGridReady={e => { optionGridApi.current = e.api; }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
         </div>
+
+        {/* ── Drag handle + Option Chain pane (only when chain is open) ── */}
+        {optionChainTicker && (() => {
+          const ownedKeys   = new Set(Object.entries(holdings.options).filter(([,o]) => o.contracts > 0).map(([k]) => k));
+          const watchedKeys = new Set(Object.entries(holdings.options).filter(([,o]) => o.contracts === 0).map(([k]) => k));
+          return (
+            <>
+              <div
+                onMouseDown={onVMouseDown}
+                className="h-1 flex-shrink-0 bg-slate-800 hover:bg-blue-500 cursor-row-resize transition-colors active:bg-blue-400"
+                title="Drag to resize"
+              />
+              <div ref={chainRef} className="flex-1 overflow-y-auto">
+                <OptionChainModal
+                  ticker={optionChainTicker}
+                  currentPrice={priceMap.get(optionChainTicker)?.price ?? 0}
+                  onClose={() => onOptionChainChange(null)}
+                  onWatchAdded={handleAddOptionWatch}
+                  ownedKeys={ownedKeys}
+                  watchedKeys={watchedKeys}
+                  initialExpiry={chainInitialExpiry ?? undefined}
+                  highlights={aiHighlights}
+                />
+              </div>
+            </>
+          );
+        })()}
 
       </div>
 
-      <div className="px-4 py-1 text-xs text-slate-600 border-t border-slate-800 flex-shrink-0">
-        Updated: {holdings.lastUpdated} · Chart icon → option chain · ✕ → remove · Double-click editable cells to edit
+      <div className="px-4 py-1.5 text-xs text-slate-600 border-t border-slate-800 flex-shrink-0 flex items-center gap-3">
+        <button
+          onClick={onRefreshPrices}
+          disabled={pricesLoading}
+          className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-[11px] font-semibold rounded-md px-2.5 py-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className={`flex-shrink-0 ${pricesLoading ? 'animate-spin' : ''}`}>
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+          {pricesLoading ? 'Updating…' : 'Refresh'}
+        </button>
+        {lastRefreshed && (
+          <span className="text-slate-500 tabular-nums">
+            {lastRefreshed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} at {lastRefreshed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+          </span>
+        )}
+        <span className="text-slate-700">~15 min delay</span>
+        <span className="text-slate-700">·</span>
+        <span>Chart icon → option chain · ✕ → remove · Double-click to edit</span>
       </div>
 
       {showAddModal && <AddStockModal existingTickers={existingTickers} onAdd={handleAddStock} onClose={() => setShowAddModal(false)} />}
@@ -723,29 +1015,25 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated }: 
           onClose={() => setShowAddOptionModal(false)}
         />
       )}
-
-      {optionChainTicker && (() => {
-        const ownedKeys   = new Set(Object.entries(holdings.options).filter(([,o]) => o.contracts > 0).map(([k]) => k));
-        const watchedKeys = new Set(Object.entries(holdings.options).filter(([,o]) => o.contracts === 0).map(([k]) => k));
-        return (
-          <OptionChainModal
-            ticker={optionChainTicker}
-            currentPrice={priceMap.get(optionChainTicker)?.price ?? 0}
-            onClose={() => setOptionChainTicker(null)}
-            onWatchAdded={handleAddOptionWatch}
-            ownedKeys={ownedKeys}
-            watchedKeys={watchedKeys}
-          />
-        );
-      })()}
     </div>
   );
 }
 
-function SectionLabel({ children, onAdd }: { children: React.ReactNode; onAdd?: () => void }) {
+function SectionLabel({ children, onAdd, addSlot, collapsed, onToggle }: { children: React.ReactNode; onAdd?: () => void; addSlot?: React.ReactNode; collapsed?: boolean; onToggle?: () => void }) {
   return (
     <div className="px-5 pt-3 pb-1.5 flex items-center gap-3 flex-shrink-0">
-      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{children}</span>
+      {onToggle ? (
+        <button onClick={onToggle} className="flex items-center gap-2 group" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+          <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" stroke="none"
+            className="text-slate-500 group-hover:text-slate-300 transition-transform"
+            style={{ transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>
+            <path d="M6 4l12 8-12 8z" />
+          </svg>
+          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest group-hover:text-slate-300 transition-colors">{children}</span>
+        </button>
+      ) : (
+        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{children}</span>
+      )}
       <div className="flex-1 h-px bg-slate-800" />
       {onAdd && (
         <button onClick={onAdd} title="Add"
@@ -757,6 +1045,71 @@ function SectionLabel({ children, onAdd }: { children: React.ReactNode; onAdd?: 
           </svg>
           Add
         </button>
+      )}
+      {addSlot}
+    </div>
+  );
+}
+
+function ColumnChooserButton({ columns, hidden, onToggle }: {
+  columns: { field: string; headerName: string }[];
+  hidden: Set<string>;
+  onToggle: (field: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        title="Choose columns"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          background: open ? 'rgba(71,85,105,0.35)' : 'rgba(71,85,105,0.15)',
+          border: '1px solid rgba(71,85,105,0.4)',
+          borderRadius: 6, padding: '2px 8px', cursor: 'pointer',
+          color: '#94a3b8', fontSize: 11, fontWeight: 700,
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(71,85,105,0.35)')}
+        onMouseLeave={e => (e.currentTarget.style.background = open ? 'rgba(71,85,105,0.35)' : 'rgba(71,85,105,0.15)')}
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+        Columns
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+          background: '#1e293b', border: '1px solid #334155',
+          borderRadius: 8, padding: '4px 0', minWidth: 148,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)', zIndex: 200,
+        }}>
+          {columns.map(col => {
+            const visible = !hidden.has(col.field);
+            return (
+              <label
+                key={col.field}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', cursor: 'pointer', userSelect: 'none', color: visible ? '#e2e8f0' : '#64748b', fontSize: 12 }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#334155')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <input type="checkbox" checked={visible} onChange={() => onToggle(col.field)} style={{ accentColor: '#34d399', cursor: 'pointer' }} />
+                {col.headerName}
+              </label>
+            );
+          })}
+        </div>
       )}
     </div>
   );

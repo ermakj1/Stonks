@@ -48,7 +48,7 @@ function buildSystemPrompt(
 
   const ownedStocks   = Object.entries(holdings.stocks).filter(([, s]) => s.shares > 0);
   const watchedStocks = Object.entries(holdings.stocks).filter(([, s]) => s.shares === 0);
-  const ownedOptions   = Object.entries(holdings.options).filter(([, o]) => o.contracts > 0);
+  const ownedOptions   = Object.entries(holdings.options).filter(([, o]) => o.contracts !== 0);
   const watchedOptions = Object.entries(holdings.options).filter(([, o]) => o.contracts === 0);
 
   const fmtOwnedStock = ([ticker, s]: [string, StockEntry]) => {
@@ -78,11 +78,19 @@ function buildSystemPrompt(
 
   const fmtOwnedOption = ([key, o]: [string, OptionEntry]) => {
     const od = optionPriceMap.get(key);
-    const gainDollar = od?.mid != null ? (od.mid - o.premium_paid) * o.contracts * 100 : null;
-    const gainPct    = gainDollar != null && o.premium_paid > 0 ? (gainDollar / (o.premium_paid * o.contracts * 100)) * 100 : null;
+    const isShort = o.contracts < 0;
+    const absContracts = Math.abs(o.contracts);
+    const gainDollar = od?.mid != null
+      ? isShort
+        ? (o.premium_paid - od.mid) * absContracts * 100
+        : (od.mid - o.premium_paid) * absContracts * 100
+      : null;
+    const gainPct = gainDollar != null && o.premium_paid > 0
+      ? (gainDollar / (o.premium_paid * absContracts * 100)) * 100
+      : null;
     return [
-      `  ${o.ticker} ${o.type.toUpperCase()} $${o.strike} exp ${o.expiration} x${o.contracts} contracts`,
-      `    Premium paid: $${o.premium_paid.toFixed(2)}/contract`,
+      `  ${o.ticker} ${o.type.toUpperCase()} $${o.strike} exp ${o.expiration} x${absContracts} contracts (${isShort ? 'SHORT / sold' : 'LONG / bought'})`,
+      `    Premium ${isShort ? 'received' : 'paid'}: $${o.premium_paid.toFixed(2)}/contract`,
       od?.mid != null
         ? `    Current mid: $${od.mid.toFixed(2)} | Bid/Ask: $${od.bid?.toFixed(2) ?? 'N/A'}/$${od.ask?.toFixed(2) ?? 'N/A'}`
         : '    Current mid: N/A',

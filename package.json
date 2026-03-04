@@ -19,6 +19,7 @@
     "dotenv": "^17.3.1",
     "express": "^4.21.2",
     "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "yahoo-finance2": "^2.13.3"
   },
   "devDependencies": {

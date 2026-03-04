@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { themeBalham, type ColDef, type RowClassParams } from 'ag-grid-community';
-import type { OptionContract, OptionEntry } from '../types';
+import type { OptionContract, OptionEntry, OptionSuggestion } from '../types';
 import { useOptionChain, getExpiryType, type ExpiryGroup, type ExpiryFreq } from '../hooks/useOptionChain';
 
 // Parse call/put from OCC symbol (e.g. "AAPL260321C00190000" → 'call')
@@ -14,6 +14,7 @@ type WatchCtx = {
   onWatch: (c: OptionContract) => void;
   ownedKeys: Set<string>;
   watchedKeys: Set<string>;
+  highlightedKeys: Set<string>;
 };
 
 function WatchCell(p: { data: OptionContract; context: WatchCtx }) {
@@ -30,6 +31,26 @@ function WatchCell(p: { data: OptionContract; context: WatchCtx }) {
     return (
       <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.04em' }}>
         WATCH
+      </span>
+    );
+  }
+  if (p.context.highlightedKeys.has(sym)) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.04em' }}>
+          AI
+        </span>
+        <button
+          onClick={e => { e.stopPropagation(); p.context.onWatch(p.data); }}
+          title="Add to option watchlist"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#475569', padding: '2px 2px', display: 'flex', alignItems: 'center' }}
+          onMouseEnter={e => (e.currentTarget.style.color = '#34d399')}
+          onMouseLeave={e => (e.currentTarget.style.color = '#475569')}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
       </span>
     );
   }
@@ -117,9 +138,10 @@ const defaultColDef: ColDef = { resizable: true, sortable: true, suppressHeaderM
 function getRowStyle(params: RowClassParams<OptionContract>) {
   const sym = params.data?.contractSymbol;
   const ctx = params.context as WatchCtx | undefined;
-  if (sym && ctx?.ownedKeys.has(sym))   return { background: 'rgba(52,211,153,0.18)' };
-  if (sym && ctx?.watchedKeys.has(sym)) return { background: 'rgba(251,191,36,0.13)' };
-  if (params.data?.inTheMoney)          return { background: 'rgba(16,185,129,0.08)' };
+  if (sym && ctx?.ownedKeys.has(sym))       return { background: 'rgba(52,211,153,0.18)' };
+  if (sym && ctx?.watchedKeys.has(sym))     return { background: 'rgba(251,191,36,0.13)' };
+  if (sym && ctx?.highlightedKeys.has(sym)) return { background: 'rgba(139,92,246,0.22)' };
+  if (params.data?.inTheMoney)              return { background: 'rgba(16,185,129,0.08)' };
   return undefined;
 }
 
@@ -127,9 +149,9 @@ const watchCol: ColDef<OptionContract> = {
   headerName: '', width: 76, sortable: false, resizable: false, cellRenderer: WatchCell,
 };
 
-function ContractGrid({ rows, isCall, ownedKeys, watchedKeys, onWatch }: {
+function ContractGrid({ rows, isCall, ownedKeys, watchedKeys, highlightedKeys, onWatch }: {
   rows: OptionContract[]; isCall: boolean;
-  ownedKeys: Set<string>; watchedKeys: Set<string>;
+  ownedKeys: Set<string>; watchedKeys: Set<string>; highlightedKeys: Set<string>;
   onWatch: (c: OptionContract) => void;
 }) {
   const cols = React.useMemo(() => [...(isCall ? callCols : putCols), watchCol], [isCall]);
@@ -146,7 +168,7 @@ function ContractGrid({ rows, isCall, ownedKeys, watchedKeys, onWatch }: {
         rowHeight={36}
         headerHeight={32}
         getRowStyle={getRowStyle}
-        context={{ onWatch, ownedKeys, watchedKeys }}
+        context={{ onWatch, ownedKeys, watchedKeys, highlightedKeys }}
       />
     </div>
   );
@@ -154,7 +176,7 @@ function ContractGrid({ rows, isCall, ownedKeys, watchedKeys, onWatch }: {
 
 // ── expiry group section ───────────────────────────────────────────────
 
-function ExpirySection({ group, view, ownedKeys, watchedKeys, onWatch }: { group: ExpiryGroup; view: 'calls' | 'puts' | 'both'; ownedKeys: Set<string>; watchedKeys: Set<string>; onWatch: (c: OptionContract) => void }) {
+function ExpirySection({ group, view, ownedKeys, watchedKeys, highlightedKeys, onWatch }: { group: ExpiryGroup; view: 'calls' | 'puts' | 'both'; ownedKeys: Set<string>; watchedKeys: Set<string>; highlightedKeys: Set<string>; onWatch: (c: OptionContract) => void }) {
   const d    = dte(group.expiry);
   const freq = getExpiryType(group.expiry);
   const meta = FREQ_META[freq];
@@ -198,7 +220,7 @@ function ExpirySection({ group, view, ownedKeys, watchedKeys, onWatch }: { group
             {view === 'both' && (
               <div style={{ fontSize: 11, fontWeight: 600, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Calls</div>
             )}
-            <ContractGrid rows={group.calls} isCall={true} ownedKeys={ownedKeys} watchedKeys={watchedKeys} onWatch={onWatch} />
+            <ContractGrid rows={group.calls} isCall={true} ownedKeys={ownedKeys} watchedKeys={watchedKeys} highlightedKeys={highlightedKeys} onWatch={onWatch} />
           </div>
         )}
         {(view === 'puts' || view === 'both') && (
@@ -206,7 +228,7 @@ function ExpirySection({ group, view, ownedKeys, watchedKeys, onWatch }: { group
             {view === 'both' && (
               <div style={{ fontSize: 11, fontWeight: 600, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Puts</div>
             )}
-            <ContractGrid rows={group.puts} isCall={false} ownedKeys={ownedKeys} watchedKeys={watchedKeys} onWatch={onWatch} />
+            <ContractGrid rows={group.puts} isCall={false} ownedKeys={ownedKeys} watchedKeys={watchedKeys} highlightedKeys={highlightedKeys} onWatch={onWatch} />
           </div>
         )}
       </div>
@@ -253,19 +275,81 @@ interface Props {
   onWatchAdded?: (key: string, entry: OptionEntry) => Promise<void>;
   ownedKeys?: Set<string>;
   watchedKeys?: Set<string>;
+  highlights?: OptionSuggestion[];
+  initialExpiry?: string; // YYYY-MM-DD — auto-select this expiry when chain loads
 }
 
-export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, ownedKeys, watchedKeys }: Props) {
+// Build a set of OCC-like keys from suggestions for matching against contract symbols
+function buildHighlightKeys(suggestions: OptionSuggestion[]): Set<string> {
+  const keys = new Set<string>();
+  for (const s of suggestions) {
+    const [yyyy, mm, dd] = s.expiration.split('-');
+    const yy = yyyy.slice(2);
+    const cp = s.type === 'call' ? 'C' : 'P';
+    const strikeStr = Math.round(s.strike * 1000).toString().padStart(8, '0');
+    keys.add(`${s.ticker.toUpperCase()}${yy}${mm}${dd}${cp}${strikeStr}`);
+  }
+  return keys;
+}
+
+// Convert suggestion expiration (YYYY-MM-DD) to unix timestamp matching expiry dates
+function suggestionToUnix(expiration: string): number {
+  return new Date(expiration + 'T16:00:00Z').getTime() / 1000;
+}
+
+export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, ownedKeys, watchedKeys, highlights, initialExpiry }: Props) {
   const trackedOwned   = ownedKeys   ?? new Set<string>();
   const trackedWatched = watchedKeys ?? new Set<string>();
+  const highlightedKeys = React.useMemo(() => buildHighlightKeys(highlights ?? []), [highlights]);
   const { loading, loadingExpiries, error, expiryDates, groups, filters, setFilters, toggleExpiry, underlyingPrice } = useOptionChain(ticker);
 
   const price = underlyingPrice || currentPrice;
   const [view, setView] = useState<'calls' | 'puts' | 'both'>('calls');
   const [watchForm, setWatchForm] = useState<WatchForm | null>(null);
   const targetRef = useRef<HTMLInputElement>(null);
+  const highlightAppliedRef = useRef<string>('');
 
   useEffect(() => { if (watchForm) targetRef.current?.focus(); }, [watchForm?.contract.contractSymbol]);
+
+  // Auto-select expiry dates matching highlighted suggestions
+  useEffect(() => {
+    if (!highlights || highlights.length === 0 || expiryDates.length === 0) return;
+    // Only apply once per set of highlights
+    const key = highlights.map(h => `${h.ticker}${h.strike}${h.expiration}`).join(',');
+    if (highlightAppliedRef.current === key) return;
+    highlightAppliedRef.current = key;
+
+    // Auto-set view based on suggestion types
+    const types = new Set(highlights.map(h => h.type));
+    if (types.has('call') && types.has('put')) setView('both');
+    else if (types.has('put')) setView('puts');
+    else setView('calls');
+
+    // Find matching expiry timestamps and toggle them on
+    const targetTimestamps = new Set(highlights.map(h => suggestionToUnix(h.expiration)));
+    for (const ts of expiryDates) {
+      // Match within a 24-hour window to handle timezone differences
+      const matches = [...targetTimestamps].some(target => Math.abs(ts - target) < 86400);
+      if (matches && !filters.selectedExpiries.includes(ts)) {
+        toggleExpiry(ts);
+      }
+    }
+  }, [highlights, expiryDates, filters.selectedExpiries, toggleExpiry]);
+
+  // Auto-select expiry matching initialExpiry (e.g. clicked from options grid)
+  const initialExpiryAppliedRef = useRef<string>('');
+  useEffect(() => {
+    if (!initialExpiry || expiryDates.length === 0) return;
+    if (initialExpiryAppliedRef.current === initialExpiry) return;
+    initialExpiryAppliedRef.current = initialExpiry;
+
+    const target = suggestionToUnix(initialExpiry);
+    for (const ts of expiryDates) {
+      if (Math.abs(ts - target) < 86400 && !filters.selectedExpiries.includes(ts)) {
+        toggleExpiry(ts);
+      }
+    }
+  }, [initialExpiry, expiryDates, filters.selectedExpiries, toggleExpiry]);
 
   function set<K extends keyof typeof filters>(key: K, val: typeof filters[K]) {
     setFilters(f => ({ ...f, [key]: val }));
@@ -308,28 +392,24 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
     setWatchForm(null);
   };
 
-  const stopProp = (e: React.MouseEvent) => e.stopPropagation();
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl flex flex-col"
-        style={{ width: '92vw', maxWidth: 960, maxHeight: '90vh', position: 'relative' }}
-        onClick={stopProp}
-      >
+    <div className="border-t border-slate-700/50" style={{ position: 'relative' }}>
         {/* ── Header ── */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700 flex-shrink-0">
-          <div className="flex items-baseline gap-3">
-            <span className="text-white font-bold text-lg">{ticker}</span>
-            <span className="text-slate-400 text-sm">Option Chain</span>
+        <div className="flex items-center justify-between px-5 py-2.5 border-b border-slate-800 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Option Chain</span>
+            <div className="flex-1 h-px bg-slate-800" style={{ minWidth: 12 }} />
+            <span className="text-white font-bold text-sm">{ticker}</span>
             {price > 0 && (
               <span className="text-emerald-400 text-sm font-semibold">${price.toFixed(2)}</span>
             )}
+            {highlights && highlights.length > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.04em' }}>
+                {highlights.length} AI suggestion{highlights.length !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none px-2">✕</button>
+          <button onClick={onClose} className="text-slate-400 hover:text-white text-lg leading-none px-2 ml-2" title="Close option chain">✕</button>
         </div>
 
         {/* ── Controls ── */}
@@ -444,7 +524,7 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
         </div>
 
         {/* ── Body ── */}
-        <div className="flex-1 overflow-y-auto px-5 pt-4 pb-4">
+        <div className="px-5 pt-4 pb-4">
           {loading && groups.length === 0 && (
             <div className="text-slate-400 text-sm py-8 text-center">Loading option chain…</div>
           )}
@@ -455,12 +535,12 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
             <div className="text-slate-500 text-sm py-8 text-center">Select one or more expiry dates above</div>
           )}
           {groups.map(group => (
-            <ExpirySection key={group.expiry} group={group} view={view} ownedKeys={trackedOwned} watchedKeys={trackedWatched} onWatch={handleWatch} />
+            <ExpirySection key={group.expiry} group={group} view={view} ownedKeys={trackedOwned} watchedKeys={trackedWatched} highlightedKeys={highlightedKeys} onWatch={handleWatch} />
           ))}
         </div>
 
         <div className="px-5 py-2 border-t border-slate-800 text-xs text-slate-600 flex-shrink-0 flex gap-4 flex-wrap">
-          <span><span style={{ color: '#34d399' }}>■</span> Owned &nbsp;<span style={{ color: '#fbbf24' }}>■</span> Watching &nbsp;<span style={{ color: '#1e4a36' }}>■</span> ITM</span>
+          <span><span style={{ color: '#34d399' }}>■</span> Owned &nbsp;<span style={{ color: '#fbbf24' }}>■</span> Watching &nbsp;<span style={{ color: '#a78bfa' }}>■</span> AI suggested &nbsp;<span style={{ color: '#1e4a36' }}>■</span> ITM</span>
           <span>·</span>
           <span>
             <span style={{ color: FREQ_META.monthly.color }}>M</span>onthly &nbsp;
@@ -468,14 +548,12 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
             <span style={{ color: FREQ_META.daily.color }}>D</span>aily
           </span>
           <span>·</span>
-          <span>Eye icon → add to watchlist</span>
-          <span>·</span>
           <span>~15 min delayed (CBOE)</span>
         </div>
 
         {/* ── Watch form overlay ── */}
         {watchForm && (
-          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 12, zIndex: 10 }}
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}
             onClick={() => setWatchForm(null)}>
             <form onSubmit={handleSaveWatch} onClick={e => e.stopPropagation()}
               style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 10, padding: 22, width: 340, boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
@@ -533,7 +611,6 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
             </form>
           </div>
         )}
-      </div>
     </div>
   );
 }
