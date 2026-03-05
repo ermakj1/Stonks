@@ -7,6 +7,11 @@ data/holdings.json
 data/strategy.md
 data/system_prompt.md
 
+# Account data — personal accounts are never committed (demo.json is the only example)
+data/accounts/
+data/active-account.json
+!data/accounts/demo.json
+
 # Dependencies & build output
 node_modules/
 dist/
