@@ -6,8 +6,9 @@ import { HoldingsPanel } from './components/HoldingsPanel';
 import { Chat } from './components/Chat';
 import { StrategyPanel } from './components/StrategyPanel';
 import { DebugPanel } from './components/DebugPanel';
+import { TradesPanel } from './components/TradesPanel';
 
-type RightTab = 'chat' | 'strategy' | 'prompt' | 'debug';
+type RightTab = 'chat' | 'strategy' | 'prompt' | 'trades' | 'debug';
 
 export default function App() {
   const [provider, setProvider] = useState<AIProvider>('anthropic');
@@ -221,7 +222,7 @@ export default function App() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Tab bar */}
           <div className="flex border-b border-slate-800 bg-slate-900 flex-shrink-0">
-            {([['chat', 'AI Chat'], ['strategy', 'Strategy'], ['prompt', 'System Prompt'], ['debug', 'AI Context']] as [RightTab, string][]).map(([tab, label]) => (
+            {([['chat', 'AI Chat'], ['strategy', 'Strategy'], ['prompt', 'System Prompt'], ['trades', 'Trade History'], ['debug', 'AI Context']] as [RightTab, string][]).map(([tab, label]) => (
               <button
                 key={tab}
                 onClick={() => setRightTab(tab)}
@@ -268,6 +269,7 @@ export default function App() {
                 placeholder={'You are a stock trading assistant…\n\nDescribe the AI\'s personality, tone, and any standing instructions.'}
               />
             )}
+            {rightTab === 'trades' && <TradesPanel activeAccountId={activeAccount?.id ?? null} />}
             {rightTab === 'debug' && <DebugPanel />}
           </div>
         </div>

@@ -39,6 +39,18 @@ function extractOptionSuggestions(text: string): { clean: string; suggestions: O
   return { clean, suggestions };
 }
 
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', userSelect: 'none' }} onClick={onChange}>
+      <div style={{ position: 'relative', width: 26, height: 14, flexShrink: 0 }}>
+        <div style={{ position: 'absolute', inset: 0, borderRadius: 7, background: checked ? '#059669' : '#334155', transition: 'background 0.18s' }} />
+        <div style={{ position: 'absolute', top: 2, left: checked ? 12 : 2, width: 10, height: 10, borderRadius: '50%', background: 'white', transition: 'left 0.18s', boxShadow: '0 1px 3px rgba(0,0,0,0.4)' }} />
+      </div>
+      <span style={{ fontSize: 11, color: checked ? '#94a3b8' : '#475569', transition: 'color 0.18s' }}>{label}</span>
+    </label>
+  );
+}
+
 export function Chat({ provider, model, providerKeys, holdings, strategy, onHoldingsUpdated, onStrategyUpdated, onOpenChain }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -50,6 +62,8 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingUpdate, setPendingUpdate] = useState<FileUpdate | null>(null);
+  const [includeHoldings, setIncludeHoldings] = useState(true);
+  const [includeHistory, setIncludeHistory] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -88,7 +102,7 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatMessages, provider, model }),
+        body: JSON.stringify({ messages: chatMessages, provider, model, includeHoldings, includeHistory }),
       });
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -362,7 +376,12 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
             )}
           </button>
         </div>
-        <p className="text-[10px] text-slate-600 mt-1.5 ml-1">Enter to send · Shift+Enter for new line</p>
+        <div className="flex items-center gap-4 mt-2 ml-0.5">
+          <Toggle checked={includeHoldings} onChange={() => setIncludeHoldings(v => !v)} label="Holdings" />
+          <Toggle checked={includeHistory} onChange={() => setIncludeHistory(v => !v)} label="Trade History" />
+          <span className="flex-1" />
+          <p className="text-[10px] text-slate-600">Enter to send · Shift+Enter for new line</p>
+        </div>
       </div>
 
       {/* File diff modal */}

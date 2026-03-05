@@ -14,11 +14,28 @@ export interface AccountHoldings {
   options: Record<string, unknown>;
 }
 
+export type TradeAction = 'buy' | 'sell' | 'open' | 'close' | 'expired' | 'assigned' | 'rolled';
+
+export interface Trade {
+  id: string;
+  date: string;           // YYYY-MM-DD
+  action: TradeAction;
+  ticker: string;
+  assetType: 'stock' | 'option';
+  optionType?: 'call' | 'put';
+  strike?: number;
+  expiration?: string;    // YYYY-MM-DD
+  qty: number;            // shares or contracts (always positive)
+  price: number;          // per share or per contract (NOT ×100)
+  notes: string;
+}
+
 export interface Account {
   id: string;
   name: string;
   holdings: AccountHoldings;
   strategy: string;
+  trades?: Trade[];
 }
 
 export function getAccountsDir(): string {

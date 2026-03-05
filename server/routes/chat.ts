@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { streamChat, type AIProvider, type ChatMessage, type ToolExecutor } from '../services/ai.js';
 import { getAllPrices, type StockQuote, type OptionsData } from '../services/yahoo.js';
 import { getFilteredChain } from '../services/cboe.js';
-import { getActiveAccountId, readAccount } from '../services/accounts.js';
+import { getActiveAccountId, readAccount, type Trade } from '../services/accounts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT_PATH = path.resolve(__dirname, '../../data/system_prompt.md');
@@ -37,12 +37,25 @@ interface Holdings {
   options: Record<string, OptionEntry>;
 }
 
+function fmtTradeHistory(trades: Trade[]): string {
+  if (trades.length === 0) return '  (none)';
+  return trades.slice(0, 50).map(t => {
+    const asset = t.assetType === 'option'
+      ? `${t.ticker} ${(t.optionType ?? '').toUpperCase()} $${t.strike} exp ${t.expiration}`
+      : t.ticker;
+    const total = (t.qty * t.price * (t.assetType === 'option' ? 100 : 1)).toFixed(2);
+    return `  ${t.date}  ${t.action.toUpperCase().padEnd(8)} ${asset.padEnd(30)} x${t.qty} @ $${t.price.toFixed(2)}  ($${total})${t.notes ? `  — ${t.notes}` : ''}`;
+  }).join('\n');
+}
+
 function buildSystemPrompt(
   persona: string,
   strategy: string,
   holdings: Holdings,
-  prices: { stocks: StockQuote[]; options: OptionsData[] }
+  prices: { stocks: StockQuote[]; options: OptionsData[] },
+  flags?: { includeHoldings?: boolean; recentTrades?: Trade[] }
 ): string {
+  const includeHoldings = flags?.includeHoldings !== false;
   const priceMap = new Map(prices.stocks.map((s) => [s.ticker, s]));
   const optionPriceMap = new Map(prices.options.map((o) => [o.key, o]));
 
@@ -111,11 +124,7 @@ function buildSystemPrompt(
 
   const section = (items: string[]) => items.length > 0 ? items.join('\n\n') : '  (none)';
 
-  return `${persona.trim()}
-
-## Trading Strategy
-${strategy}
-
+  const holdingsSection = includeHoldings ? `
 ## Current Holdings (as of ${holdings.lastUpdated})
 
 ### Stocks — Owned
@@ -128,7 +137,20 @@ ${section(watchedStocks.map(fmtWatchedStock))}
 ${section(ownedOptions.map(fmtOwnedOption))}
 
 ### Options — Watching
-${section(watchedOptions.map(fmtWatchedOption))}
+${section(watchedOptions.map(fmtWatchedOption))}` : `
+## Holdings
+(Holdings context disabled for this message)`;
+
+  const historySection = flags?.recentTrades
+    ? `\n## Recent Trade History\n${fmtTradeHistory(flags.recentTrades)}`
+    : '';
+
+  return `${persona.trim()}
+
+## Trading Strategy
+${strategy}
+${holdingsSection}
+${historySection}
 
 ## CRITICAL RULE — YOU MUST FOLLOW THIS EVERY TIME
 Any time your response names a specific option contract (ticker + strike + expiration), you MUST output an OPTION_SUGGESTION block at the very end of your response. No exceptions. This is how the UI renders "Add to Watchlist" buttons for the user. If you skip this block, the user has no way to act on your recommendation.
@@ -226,7 +248,7 @@ chatRouter.get('/context', async (_req, res) => {
     const account = await readAccount(accountId);
     const holdings = account.holdings as Holdings;
     const prices = await getAllPrices(holdings);
-    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices);
+    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices, { includeHoldings: true });
 
     res.json({ systemPrompt, prices, holdings });
   } catch (err) {
@@ -237,10 +259,12 @@ chatRouter.get('/context', async (_req, res) => {
 
 chatRouter.post('/', async (req, res) => {
   try {
-    const { messages, provider = process.env.AI_PROVIDER ?? 'anthropic', model } = req.body as {
+    const { messages, provider = process.env.AI_PROVIDER ?? 'anthropic', model, includeHoldings = true, includeHistory = false } = req.body as {
       messages: ChatMessage[];
       provider?: AIProvider;
       model?: string;
+      includeHoldings?: boolean;
+      includeHistory?: boolean;
     };
 
     if (!messages || !Array.isArray(messages)) {
@@ -257,7 +281,8 @@ chatRouter.post('/', async (req, res) => {
     const holdings = account.holdings as Holdings;
     const prices = await getAllPrices(holdings);
     const priceMap = new Map(prices.stocks.map(s => [s.ticker, s]));
-    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices);
+    const recentTrades = includeHistory ? (account.trades ?? []) : undefined;
+    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices, { includeHoldings, recentTrades });
     const toolExecutor = makeToolExecutor(priceMap);
 
     await streamChat(messages, systemPrompt, provider, res, toolExecutor, model);
