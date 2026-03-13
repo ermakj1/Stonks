@@ -71,6 +71,29 @@ function tradeTotal(t: Trade): number {
   return t.qty * t.price * (t.assetType === 'option' ? 100 : 1);
 }
 
+// Returns true if this trade represents a still-open position
+function isOpenPosition(trade: Trade, allTrades: Trade[]): boolean {
+  if (trade.action === 'open') {
+    return !allTrades.some(t =>
+      t.id !== trade.id &&
+      (t.action === 'close' || t.action === 'expired' || t.action === 'assigned') &&
+      t.ticker === trade.ticker &&
+      t.optionType === trade.optionType &&
+      t.strike === trade.strike &&
+      t.expiration === trade.expiration
+    );
+  }
+  if (trade.action === 'buy' && trade.assetType === 'stock') {
+    return !allTrades.some(t =>
+      t.id !== trade.id &&
+      t.action === 'sell' &&
+      t.ticker === trade.ticker &&
+      t.assetType === 'stock'
+    );
+  }
+  return false;
+}
+
 // Match close/expired trades to their opening trade for P&L
 function computePnL(trade: Trade, allTrades: Trade[]): number | null {
   if (trade.action !== 'close' && trade.action !== 'expired') return null;
@@ -631,6 +654,7 @@ export function TradesPanel({ activeAccountId }: Props) {
     ...t,
     total: tradeTotal(t),
     pnl: computePnL(t, trades) ?? computeStockPnL(t, trades),
+    _isOpen: isOpenPosition(t, trades),
   })), [trades]);
 
   // Apply date range filter for display (P&L matching still uses all trades above)
@@ -639,6 +663,9 @@ export function TradesPanel({ activeAccountId }: Props) {
     if (!cutoff) return rows;
     return rows.filter(r => r.date >= cutoff);
   }, [rows, dateRange]);
+
+  const openRows   = useMemo(() => filteredRows.filter(r => r._isOpen), [filteredRows]);
+  const closedRows = useMemo(() => filteredRows.filter(r => !r._isOpen), [filteredRows]);
 
   // Summary footer (reflects filtered view)
   const totalRealized = useMemo(() => filteredRows.reduce((s, r) => s + (r.pnl ?? 0), 0), [filteredRows]);
@@ -717,7 +744,7 @@ export function TradesPanel({ activeAccountId }: Props) {
       </div>
 
       {/* Grid */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden flex flex-col">
         {loading ? (
           <div className="flex items-center justify-center h-full text-slate-500 text-sm">Loading…</div>
         ) : trades.length === 0 ? (
@@ -740,18 +767,49 @@ export function TradesPanel({ activeAccountId }: Props) {
             </button>
           </div>
         ) : (
-          <div style={{ height: '100%' }}>
-            <AgGridReact<TradeRow>
-              theme={darkTheme}
-              rowData={filteredRows}
-              columnDefs={cols}
-              defaultColDef={defaultColDef}
-              rowHeight={44}
-              headerHeight={34}
-              animateRows
-              context={gridCtx}
-            />
-          </div>
+          <>
+            {/* ── Open Positions ── */}
+            <div className="flex-shrink-0 border-b border-slate-800" style={{ height: openRows.length > 0 ? Math.min(openRows.length * 44 + 34 + 28, 320) : 28 }}>
+              <div className="flex items-center gap-2 px-4" style={{ height: 28, background: 'rgba(52,211,153,0.04)', borderBottom: openRows.length > 0 ? '1px solid #1e293b' : 'none' }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Open Positions</span>
+                <span style={{ fontSize: 10, color: '#475569', fontWeight: 600 }}>{openRows.length}</span>
+              </div>
+              {openRows.length > 0 && (
+                <div style={{ height: Math.min(openRows.length * 44 + 34, 292) }}>
+                  <AgGridReact<TradeRow>
+                    theme={darkTheme}
+                    rowData={openRows}
+                    columnDefs={cols}
+                    defaultColDef={defaultColDef}
+                    rowHeight={44}
+                    headerHeight={34}
+                    animateRows
+                    context={gridCtx}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* ── Closed / History ── */}
+            <div className="flex flex-col flex-1 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 flex-shrink-0" style={{ height: 28, background: 'rgba(15,23,42,0.6)', borderBottom: '1px solid #1e293b' }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Closed / History</span>
+                <span style={{ fontSize: 10, color: '#334155', fontWeight: 600 }}>{closedRows.length}</span>
+              </div>
+              <div className="flex-1">
+                <AgGridReact<TradeRow>
+                  theme={darkTheme}
+                  rowData={closedRows}
+                  columnDefs={cols}
+                  defaultColDef={defaultColDef}
+                  rowHeight={44}
+                  headerHeight={34}
+                  animateRows
+                  context={gridCtx}
+                />
+              </div>
+            </div>
+          </>
         )}
       </div>
 
