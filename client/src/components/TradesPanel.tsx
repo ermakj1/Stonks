@@ -168,6 +168,22 @@ function PnLCell({ value }: { value: number | null }) {
   return <span style={{ color, fontWeight: 600 }}>{dollar(value, { sign: true })}</span>;
 }
 
+function CloseCell({ data, context }: { data: Trade; context: { onClosePosition: (trade: Trade) => void } }) {
+  if (!data) return null;
+  const label = data.assetType === 'stock' ? 'Sell' : 'Close';
+  return (
+    <button
+      onClick={e => { e.stopPropagation(); context.onClosePosition(data); }}
+      style={{ background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.3)', cursor: 'pointer', color: '#34d399', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, lineHeight: '18px' }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(52,211,153,0.22)'; e.currentTarget.style.borderColor = 'rgba(52,211,153,0.6)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(52,211,153,0.1)'; e.currentTarget.style.borderColor = 'rgba(52,211,153,0.3)'; }}
+      title={`${label} position`}
+    >
+      {label}
+    </button>
+  );
+}
+
 function DeleteCell({ data, context }: { data: Trade; context: { onDelete: (id: string) => void } }) {
   if (!data) return null;
   return (
@@ -438,6 +454,129 @@ function ImportModal({ onClose, onImport }: ImportModalProps) {
   );
 }
 
+// ── ClosePositionModal ────────────────────────────────────────────────
+
+interface ClosePositionModalProps {
+  trade: Trade;
+  onClose: () => void;
+  onConfirm: (closing: Omit<Trade, 'id'>) => Promise<void>;
+}
+
+function ClosePositionModal({ trade, onClose, onConfirm }: ClosePositionModalProps) {
+  const [price, setPrice] = useState('');
+  const [date, setDate]   = useState(today());
+  const [saving, setSaving] = useState(false);
+
+  const isOption = trade.assetType === 'option';
+  const typeColor = trade.optionType === 'call' ? '#34d399' : '#f87171';
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!price) return;
+    setSaving(true);
+    try {
+      const closing: Omit<Trade, 'id'> = {
+        date,
+        action: isOption ? 'close' : 'sell',
+        ticker: trade.ticker,
+        assetType: trade.assetType,
+        optionType: trade.optionType,
+        strike: trade.strike,
+        expiration: trade.expiration,
+        qty: trade.qty,
+        price: Number(price),
+        notes: '',
+      };
+      await onConfirm(closing);
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputCls = 'bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-emerald-500 w-full';
+  const labelCls = 'text-xs text-slate-400 font-medium mb-1 block';
+  const total = trade.qty * Number(price || 0) * (isOption ? 100 : 1);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+          <span className="text-sm font-semibold text-white">{isOption ? 'Close Position' : 'Sell Shares'}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', lineHeight: 1 }}
+            onMouseEnter={e => (e.currentTarget.style.color = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.color = '#64748b')}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Position summary */}
+        <div className="px-5 pt-4 pb-1">
+          <div className="bg-slate-800/60 rounded-xl px-4 py-3 flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-base font-bold text-white">{trade.ticker}</span>
+              {isOption && (
+                <>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: typeColor }}>{trade.optionType?.toUpperCase()}</span>
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>${trade.strike} · {trade.expiration?.slice(2).replace(/-/g, '/')}</span>
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-slate-500">{isOption ? `${trade.qty} contract${trade.qty !== 1 ? 's' : ''}` : `${trade.qty} shares`}</span>
+              <span className="text-xs text-slate-600">·</span>
+              <span className="text-xs text-slate-500">opened @ <span className="text-slate-300">${trade.price.toFixed(2)}</span></span>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5 flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Date</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} className={inputCls} required />
+            </div>
+            <div>
+              <label className={labelCls}>{isOption ? 'Close Price / Contract' : 'Sale Price / Share'}</label>
+              <input type="number" min="0" step="any" value={price} onChange={e => setPrice(e.target.value)}
+                placeholder="0.00" className={inputCls} required autoFocus />
+            </div>
+          </div>
+
+          {price && (
+            <div className="text-xs text-slate-400 -mt-1">
+              Total: <span className="text-slate-200 font-semibold">{dollar(total)}</span>
+              {isOption && <span className="text-slate-500"> (× 100)</span>}
+              {Number(price) > 0 && (
+                <>
+                  <span className="text-slate-600 mx-2">·</span>
+                  {(() => {
+                    const pnl = isOption
+                      ? (trade.price - Number(price)) * trade.qty * 100   // sold-to-open: profit when close < open
+                      : (Number(price) - trade.price) * trade.qty;         // bought stock: profit when sell > buy
+                    return (
+                      <span className={pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                        P&amp;L: {dollar(pnl, { sign: true })}
+                      </span>
+                    );
+                  })()}
+                </>
+              )}
+            </div>
+          )}
+
+          <button type="submit" disabled={saving || !price}
+            className="w-full py-2 rounded-xl text-sm font-semibold transition-colors mt-1"
+            style={{ background: saving || !price ? '#334155' : '#059669', color: saving || !price ? '#64748b' : 'white', border: 'none', cursor: saving || !price ? 'not-allowed' : 'pointer' }}>
+            {saving ? 'Saving…' : `Log ${isOption ? 'Close' : 'Sell'}`}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function AddTradeModal({ onClose, onAdd }: AddTradeModalProps) {
   const [date, setDate]             = useState(today());
   const [action, setAction]         = useState<TradeAction>('buy');
@@ -607,11 +746,12 @@ interface Props {
 }
 
 export function TradesPanel({ activeAccountId }: Props) {
-  const [trades, setTrades]         = useState<Trade[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [showAdd, setShowAdd]       = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [dateRange, setDateRange]   = useState<DateRange>('all');
+  const [trades, setTrades]               = useState<Trade[]>([]);
+  const [loading, setLoading]             = useState(true);
+  const [showAdd, setShowAdd]             = useState(false);
+  const [showImport, setShowImport]       = useState(false);
+  const [dateRange, setDateRange]         = useState<DateRange>('all');
+  const [closingTrade, setClosingTrade]   = useState<Trade | null>(null);
 
   const fetchTrades = useCallback(async () => {
     setLoading(true);
@@ -647,7 +787,12 @@ export function TradesPanel({ activeAccountId }: Props) {
     setTrades(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  const gridCtx = useMemo(() => ({ onDelete: handleDelete }), [handleDelete]);
+  const handleClosePosition = useCallback((trade: Trade) => {
+    setClosingTrade(trade);
+  }, []);
+
+  const gridCtx     = useMemo(() => ({ onDelete: handleDelete }), [handleDelete]);
+  const openGridCtx = useMemo(() => ({ onDelete: handleDelete, onClosePosition: handleClosePosition }), [handleDelete, handleClosePosition]);
 
   // Compute rows with P&L (against all trades for accurate matching)
   const rows = useMemo(() => trades.map(t => ({
@@ -685,6 +830,18 @@ export function TradesPanel({ activeAccountId }: Props) {
     { field: 'total',  headerName: 'Total',   width: 110, cellRenderer: TotalCell },
     { field: 'pnl',    headerName: 'Realized P&L', width: 115, cellRenderer: PnLCell },
     { field: 'notes',  headerName: 'Notes',   flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },
+    { headerName: '', width: 40, sortable: false, resizable: false, cellRenderer: DeleteCell },
+  ], []);
+
+  const openCols = useMemo<ColDef<TradeRow>[]>(() => [
+    { field: 'date',   headerName: 'Date',    width: 105, sort: 'desc' },
+    { field: 'action', headerName: 'Action',  width: 95,  cellRenderer: ActionCell },
+    { headerName: 'Asset', width: 220, cellRenderer: AssetCell, valueGetter: p => `${p.data?.ticker} ${p.data?.optionType ?? ''}` },
+    { field: 'qty',    headerName: 'Qty',     width: 70,  valueFormatter: p => p.value?.toLocaleString() },
+    { field: 'price',  headerName: 'Price',   width: 88,  valueFormatter: p => p.data ? (p.data.assetType === 'option' ? `$${p.value?.toFixed(2)}/c` : `$${p.value?.toFixed(2)}`) : '' },
+    { field: 'total',  headerName: 'Total',   width: 110, cellRenderer: TotalCell },
+    { field: 'notes',  headerName: 'Notes',   flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },
+    { headerName: '', width: 72, sortable: false, resizable: false, cellRenderer: CloseCell },
     { headerName: '', width: 40, sortable: false, resizable: false, cellRenderer: DeleteCell },
   ], []);
 
@@ -779,12 +936,12 @@ export function TradesPanel({ activeAccountId }: Props) {
                   <AgGridReact<TradeRow>
                     theme={darkTheme}
                     rowData={openRows}
-                    columnDefs={cols}
+                    columnDefs={openCols}
                     defaultColDef={defaultColDef}
                     rowHeight={44}
                     headerHeight={34}
                     animateRows
-                    context={gridCtx}
+                    context={openGridCtx}
                   />
                 </div>
               )}
@@ -838,6 +995,13 @@ export function TradesPanel({ activeAccountId }: Props) {
 
       {showAdd    && <AddTradeModal  onClose={() => setShowAdd(false)}   onAdd={handleAdd}       />}
       {showImport && <ImportModal    onClose={() => setShowImport(false)} onImport={handleImport} />}
+      {closingTrade && (
+        <ClosePositionModal
+          trade={closingTrade}
+          onClose={() => setClosingTrade(null)}
+          onConfirm={handleAdd}
+        />
+      )}
     </div>
   );
 }
