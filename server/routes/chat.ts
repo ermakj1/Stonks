@@ -39,13 +39,60 @@ interface Holdings {
 
 function fmtTradeHistory(trades: Trade[]): string {
   if (trades.length === 0) return '  (none)';
-  return trades.slice(0, 50).map(t => {
+
+  // Compute simple stats over all trades
+  const closedActions = new Set(['close', 'expired', 'assigned', 'sell']);
+  const openActions = new Set(['open', 'buy']);
+  const lots = new Map<string, { price: number; qty: number }[]>();
+
+  function lotKey(t: Trade) {
+    return t.assetType === 'option'
+      ? `${t.ticker}-${t.optionType}-${t.strike}-${t.expiration}`
+      : `${t.ticker}-stock`;
+  }
+
+  const pnls: number[] = [];
+  const sorted = [...trades].sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const t of sorted) {
+    const key = lotKey(t);
+    if (openActions.has(t.action)) {
+      const q = lots.get(key) ?? [];
+      q.push({ price: t.price, qty: t.qty });
+      lots.set(key, q);
+    } else if (closedActions.has(t.action)) {
+      const q = lots.get(key) ?? [];
+      let rem = t.qty; let pnl = 0;
+      while (rem > 0 && q.length > 0) {
+        const lot = q[0];
+        const c = Math.min(rem, lot.qty);
+        if (t.action === 'expired') pnl += -(lot.price * c * 100);
+        else if (t.action === 'close' || t.action === 'assigned') pnl += (lot.price - t.price) * c * 100;
+        else pnl += (t.price - lot.price) * c;
+        lot.qty -= c; rem -= c;
+        if (lot.qty <= 0) q.shift();
+      }
+      lots.set(key, q);
+      pnls.push(pnl);
+    }
+  }
+
+  const totalPnL = pnls.reduce((s, p) => s + p, 0);
+  const wins = pnls.filter(p => p > 0).length;
+  const winRate = pnls.length > 0 ? ((wins / pnls.length) * 100).toFixed(0) : 'N/A';
+  const statsLine = pnls.length > 0
+    ? `Stats: ${trades.length} trades | ${pnls.length} closed | Win rate ${winRate}% | Realized P&L: ${totalPnL >= 0 ? '+' : ''}$${totalPnL.toFixed(2)}\n`
+    : '';
+
+  const lines = trades.slice(0, 50).map(t => {
     const asset = t.assetType === 'option'
       ? `${t.ticker} ${(t.optionType ?? '').toUpperCase()} $${t.strike} exp ${t.expiration}`
       : t.ticker;
     const total = (t.qty * t.price * (t.assetType === 'option' ? 100 : 1)).toFixed(2);
     return `  ${t.date}  ${t.action.toUpperCase().padEnd(8)} ${asset.padEnd(30)} x${t.qty} @ $${t.price.toFixed(2)}  ($${total})${t.notes ? `  — ${t.notes}` : ''}`;
   }).join('\n');
+
+  return `${statsLine}${lines}`;
 }
 
 function buildSystemPrompt(

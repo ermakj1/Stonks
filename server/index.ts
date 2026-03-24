@@ -12,6 +12,7 @@ import { chatRouter } from './routes/chat.js';
 import { optionsRouter } from './routes/options.js';
 import { accountsRouter } from './routes/accounts.js';
 import { tradesRouter } from './routes/trades.js';
+import { positionsRouter } from './routes/positions.js';
 import { ACCOUNTS_DIR } from './services/accounts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -141,6 +142,7 @@ app.use('/api/prices', pricesRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/options', optionsRouter);
 app.use('/api/trades', tradesRouter);
+app.use('/api/positions', positionsRouter);
 
 app.get('/api/config', (_req, res) => {
   res.json({

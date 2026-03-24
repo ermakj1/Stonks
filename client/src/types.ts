@@ -151,3 +151,17 @@ export interface Trade {
   price: number;          // per share or per contract (NOT ×100)
   notes: string;
 }
+
+export interface UnrealizedPosition {
+  id: string;
+  ticker: string;
+  assetType: 'stock' | 'option';
+  optionType?: string;
+  strike?: number;
+  expiration?: string;
+  netQty: number;
+  avgCostBasis: number;
+  currentPrice: number | null;
+  unrealizedGain: number | null;
+  unrealizedGainPct: number | null;
+}

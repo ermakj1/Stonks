@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { AgGridReact } from 'ag-grid-react';
 import { ModuleRegistry, AllCommunityModule, themeBalham, type ColDef } from 'ag-grid-community';
 import type { Trade, TradeAction } from '../types';
+import { PnLChart } from './PnLChart';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -56,6 +57,57 @@ function dollar(n: number, opts?: { sign?: boolean }) {
   return n < 0 ? `-${s}` : `+${s}`;
 }
 
+function dteFromExpiry(expiration: string): number {
+  return Math.max(0, Math.round((new Date(expiration).getTime() - Date.now()) / 86400000));
+}
+
+interface TradeStats {
+  count: number;
+  winners: number;
+  losers: number;
+  winRate: number;
+  avgWin: number;
+  avgLoss: number;
+  largestWin: number;
+  largestLoss: number;
+}
+
+function computeStats(rows: { pnl: number | null }[]): TradeStats | null {
+  const pnls = rows.map(r => r.pnl).filter((p): p is number => p !== null);
+  if (pnls.length < 2) return null;
+  const wins  = pnls.filter(p => p > 0);
+  const losses = pnls.filter(p => p < 0);
+  return {
+    count: pnls.length,
+    winners: wins.length,
+    losers: losses.length,
+    winRate: wins.length / pnls.length,
+    avgWin: wins.length > 0 ? wins.reduce((s, p) => s + p, 0) / wins.length : 0,
+    avgLoss: losses.length > 0 ? losses.reduce((s, p) => s + p, 0) / losses.length : 0,
+    largestWin: wins.length > 0 ? Math.max(...wins) : 0,
+    largestLoss: losses.length > 0 ? Math.min(...losses) : 0,
+  };
+}
+
+type TradeRowForExport = { date: string; action: string; ticker: string; assetType: string; optionType?: string; strike?: number; expiration?: string; qty: number; price: number; total: number; pnl: number | null; notes: string };
+
+function exportCSV(rows: TradeRowForExport[], filename: string) {
+  const headers = ['Date','Action','Ticker','AssetType','OptionType','Strike','Expiration','Qty','Price','Total','PnL','Notes'];
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [
+    headers.join(','),
+    ...rows.map(r => [
+      r.date, r.action, r.ticker, r.assetType, r.optionType ?? '', r.strike ?? '', r.expiration ?? '',
+      r.qty, r.price.toFixed(2), r.total.toFixed(2), r.pnl?.toFixed(2) ?? '', r.notes,
+    ].map(esc).join(',')),
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 const ACTION_META: Record<TradeAction, { label: string; color: string; bg: string; isInflow: boolean }> = {
   buy:      { label: 'Buy',      color: '#60a5fa', bg: 'rgba(96,165,250,0.12)',  isInflow: false },
   sell:     { label: 'Sell',     color: '#34d399', bg: 'rgba(52,211,153,0.12)',  isInflow: true  },
@@ -94,38 +146,61 @@ function isOpenPosition(trade: Trade, allTrades: Trade[]): boolean {
   return false;
 }
 
-// Match close/expired trades to their opening trade for P&L
-function computePnL(trade: Trade, allTrades: Trade[]): number | null {
-  if (trade.action !== 'close' && trade.action !== 'expired') return null;
-  // Find most recent matching open for same contract
-  const openAction = 'open';
-  const match = allTrades.find(t =>
-    t.id !== trade.id &&
-    t.action === openAction &&
-    t.ticker === trade.ticker &&
-    t.assetType === 'option' &&
-    t.optionType === trade.optionType &&
-    t.strike === trade.strike &&
-    t.expiration === trade.expiration
-  );
-  if (!match) return null;
-  const multiplier = 100;
-  if (trade.action === 'expired') {
-    return -(match.price * trade.qty * multiplier);
-  }
-  return (match.price - trade.price) * trade.qty * multiplier;
-}
+// FIFO lot-based P&L engine
+type Lot = { price: number; qty: number };
 
-function computeStockPnL(trade: Trade, allTrades: Trade[]): number | null {
-  if (trade.action !== 'sell' || trade.assetType !== 'stock') return null;
-  const match = allTrades.find(t =>
-    t.id !== trade.id &&
-    t.action === 'buy' &&
-    t.ticker === trade.ticker &&
-    t.assetType === 'stock'
-  );
-  if (!match) return null;
-  return (trade.price - match.price) * trade.qty;
+function buildFIFOPnL(trades: Trade[]): Map<string, number> {
+  const sorted = [...trades].sort((a, b) => a.date.localeCompare(b.date));
+  const lots = new Map<string, Lot[]>();
+  const pnlMap = new Map<string, number>();
+
+  function lotKey(t: Trade): string {
+    return t.assetType === 'option'
+      ? `${t.ticker}-${t.optionType}-${t.strike}-${t.expiration}`
+      : `${t.ticker}-stock`;
+  }
+
+  for (const t of sorted) {
+    const key = lotKey(t);
+
+    if (t.action === 'open' || (t.action === 'buy' && t.assetType === 'stock')) {
+      const q = lots.get(key) ?? [];
+      q.push({ price: t.price, qty: t.qty });
+      lots.set(key, q);
+
+    } else if (
+      t.action === 'close' || t.action === 'expired' || t.action === 'assigned' ||
+      (t.action === 'sell' && t.assetType === 'stock')
+    ) {
+      const q = lots.get(key) ?? [];
+      let remaining = t.qty;
+      let pnl = 0;
+
+      while (remaining > 0 && q.length > 0) {
+        const lot = q[0];
+        const consumed = Math.min(remaining, lot.qty);
+
+        if (t.action === 'expired') {
+          // Short option expires worthless — keep full premium (shown as negative to match close semantics)
+          pnl += -(lot.price * consumed * 100);
+        } else if (t.action === 'close' || t.action === 'assigned') {
+          pnl += (lot.price - t.price) * consumed * 100;
+        } else {
+          // stock sell
+          pnl += (t.price - lot.price) * consumed;
+        }
+
+        lot.qty -= consumed;
+        remaining -= consumed;
+        if (lot.qty <= 0) q.shift();
+      }
+
+      lots.set(key, q);
+      pnlMap.set(t.id, pnl);
+    }
+  }
+
+  return pnlMap;
 }
 
 // ── cell renderers ────────────────────────────────────────────────────
@@ -246,6 +321,7 @@ export interface ParsedImportRow {
   fees: number;
   amount: number;
   selected: boolean;
+  duplicate: boolean;
 }
 
 export function parseBrokerText(text: string): ParsedImportRow[] {
@@ -279,6 +355,7 @@ export function parseBrokerText(text: string): ParsedImportRow[] {
         fees: parseFloat(feesStr) || 0,
         amount: parseFloat(amountStr) || 0,
         selected: true,
+        duplicate: false,
         parsed: {
           date, action,
           ticker: optParsed.ticker,
@@ -301,6 +378,7 @@ export function parseBrokerText(text: string): ParsedImportRow[] {
         fees: parseFloat(feesStr) || 0,
         amount: parseFloat(amountStr) || 0,
         selected: true,
+        duplicate: false,
         parsed: {
           date, action,
           ticker,
@@ -315,14 +393,27 @@ export function parseBrokerText(text: string): ParsedImportRow[] {
   return rows;
 }
 
+function isDuplicate(parsed: Omit<Trade, 'id'>, existing: Trade[]): boolean {
+  return existing.some(t =>
+    t.date === parsed.date &&
+    t.ticker === parsed.ticker &&
+    t.qty === parsed.qty &&
+    Math.abs(t.price - parsed.price) < 0.005 &&
+    t.assetType === parsed.assetType &&
+    t.optionType === parsed.optionType &&
+    t.strike === parsed.strike
+  );
+}
+
 // ── ImportModal ───────────────────────────────────────────────────────
 
 interface ImportModalProps {
   onClose: () => void;
   onImport: (trades: Omit<Trade, 'id'>[]) => Promise<void>;
+  existingTrades: Trade[];
 }
 
-function ImportModal({ onClose, onImport }: ImportModalProps) {
+function ImportModal({ onClose, onImport, existingTrades }: ImportModalProps) {
   const [raw, setRaw]       = useState('');
   const [rows, setRows]     = useState<ParsedImportRow[]>([]);
   const [saving, setSaving] = useState(false);
@@ -330,8 +421,13 @@ function ImportModal({ onClose, onImport }: ImportModalProps) {
   // Auto-parse whenever text changes
   useEffect(() => {
     if (!raw.trim()) { setRows([]); return; }
-    setRows(parseBrokerText(raw));
-  }, [raw]);
+    const parsed = parseBrokerText(raw).map(r => ({
+      ...r,
+      duplicate: isDuplicate(r.parsed, existingTrades),
+      selected: !isDuplicate(r.parsed, existingTrades),
+    }));
+    setRows(parsed);
+  }, [raw, existingTrades]);
 
   const toggleRow = (idx: number) => {
     setRows(prev => prev.map((r, i) => i === idx ? { ...r, selected: !r.selected } : r));
@@ -391,6 +487,11 @@ function ImportModal({ onClose, onImport }: ImportModalProps) {
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs text-slate-400 font-medium">{rows.length} rows parsed</span>
               <button onClick={toggleAll} className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors">(toggle all)</button>
+              {rows.filter(r => r.duplicate).length > 0 && (
+                <span style={{ fontSize: 10, color: '#f59e0b', fontWeight: 600, background: 'rgba(234,179,8,0.1)', padding: '1px 7px', borderRadius: 4 }}>
+                  {rows.filter(r => r.duplicate).length} duplicate{rows.filter(r => r.duplicate).length !== 1 ? 's' : ''} deselected
+                </span>
+              )}
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
@@ -408,12 +509,12 @@ function ImportModal({ onClose, onImport }: ImportModalProps) {
                     ? `${t.ticker} ${t.optionType?.toUpperCase()} $${t.strike} ${t.expiration?.slice(2).replace(/-/g, '/')}`
                     : t.ticker;
                   return (
-                    <tr key={idx} style={{ opacity: row.selected ? 1 : 0.35, borderBottom: '1px solid #1e293b', cursor: 'pointer' }}
+                    <tr key={idx} style={{ opacity: row.selected ? 1 : 0.35, borderBottom: '1px solid #1e293b', cursor: 'pointer', backgroundColor: row.duplicate ? 'rgba(234,179,8,0.05)' : undefined }}
                       onClick={() => toggleRow(idx)}>
                       <td style={{ padding: '5px 8px' }}>
                         <input type="checkbox" checked={row.selected} onChange={() => toggleRow(idx)} onClick={e => e.stopPropagation()} style={{ accentColor: '#34d399', cursor: 'pointer' }} />
                       </td>
-                      <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{t.date}</td>
+                      <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{t.date}{row.duplicate && <span style={{fontSize:9, color:'#f59e0b', fontWeight:700, marginLeft:4}}>DUP</span>}</td>
                       <td style={{ padding: '5px 8px' }}>
                         <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: ACTION_META[t.action]?.bg, color: actionColor(t.action) }}>
                           {ACTION_META[t.action]?.label}
@@ -752,6 +853,7 @@ export function TradesPanel({ activeAccountId }: Props) {
   const [showImport, setShowImport]       = useState(false);
   const [dateRange, setDateRange]         = useState<DateRange>('all');
   const [closingTrade, setClosingTrade]   = useState<Trade | null>(null);
+  const [showChart, setShowChart]         = useState(false);
 
   const fetchTrades = useCallback(async () => {
     setLoading(true);
@@ -794,13 +896,15 @@ export function TradesPanel({ activeAccountId }: Props) {
   const gridCtx     = useMemo(() => ({ onDelete: handleDelete }), [handleDelete]);
   const openGridCtx = useMemo(() => ({ onDelete: handleDelete, onClosePosition: handleClosePosition }), [handleDelete, handleClosePosition]);
 
-  // Compute rows with P&L (against all trades for accurate matching)
+  const fifoMap   = useMemo(() => buildFIFOPnL(trades), [trades]);
+
+  // Compute rows with P&L
   const rows = useMemo(() => trades.map(t => ({
     ...t,
     total: tradeTotal(t),
-    pnl: computePnL(t, trades) ?? computeStockPnL(t, trades),
+    pnl: fifoMap.get(t.id) ?? null,
     _isOpen: isOpenPosition(t, trades),
-  })), [trades]);
+  })), [trades, fifoMap]);
 
   // Apply date range filter for display (P&L matching still uses all trades above)
   const filteredRows = useMemo(() => {
@@ -841,9 +945,17 @@ export function TradesPanel({ activeAccountId }: Props) {
     { field: 'price',  headerName: 'Price',   width: 88,  valueFormatter: p => p.data ? (p.data.assetType === 'option' ? `$${p.value?.toFixed(2)}/c` : `$${p.value?.toFixed(2)}`) : '' },
     { field: 'total',  headerName: 'Total',   width: 110, cellRenderer: TotalCell },
     { field: 'notes',  headerName: 'Notes',   flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },
+    { headerName: 'DTE', width: 60, sortable: true, resizable: true, suppressHeaderMenuButton: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      valueGetter: (p: any) => p.data?.assetType === 'option' && p.data.expiration ? dteFromExpiry(p.data.expiration) : null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cellStyle: (p: any) => p.value == null ? { color: '#334155', fontWeight: 400 } : p.value <= 7 ? { color: '#ef4444', fontWeight: 700 } : p.value <= 14 ? { color: '#f59e0b', fontWeight: 600 } : { color: '#64748b', fontWeight: 400 },
+    },
     { headerName: '', width: 72, sortable: false, resizable: false, cellRenderer: CloseCell },
     { headerName: '', width: 40, sortable: false, resizable: false, cellRenderer: DeleteCell },
   ], []);
+
+  const stats = useMemo(() => computeStats(filteredRows), [filteredRows]);
 
   const summaryRef = useRef<HTMLDivElement>(null);
 
@@ -878,6 +990,28 @@ export function TradesPanel({ activeAccountId }: Props) {
           ))}
         </div>
         <div className="flex-1 h-px bg-slate-800" />
+        {filteredRows.length > 0 && (
+          <button
+            onClick={() => setShowChart(v => !v)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, background: showChart ? 'rgba(99,102,241,0.18)' : 'rgba(71,85,105,0.15)', border: showChart ? '1px solid rgba(99,102,241,0.6)' : '1px solid rgba(71,85,105,0.4)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', color: showChart ? '#a5b4fc' : '#94a3b8', fontSize: 12, fontWeight: 700 }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </svg>
+            Chart
+          </button>
+        )}
+        {filteredRows.length > 0 && (
+          <button
+            onClick={() => exportCSV(filteredRows, `trades-${new Date().toISOString().slice(0,10)}.csv`)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(71,85,105,0.15)', border: '1px solid rgba(71,85,105,0.4)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 12, fontWeight: 700 }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(71,85,105,0.3)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(71,85,105,0.15)')}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            CSV
+          </button>
+        )}
         <button
           onClick={() => setShowImport(true)}
           style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(71,85,105,0.15)', border: '1px solid rgba(71,85,105,0.4)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 12, fontWeight: 700 }}
@@ -925,6 +1059,27 @@ export function TradesPanel({ activeAccountId }: Props) {
           </div>
         ) : (
           <>
+            {/* ── Chart ── */}
+            {showChart && (
+              <div className="flex-shrink-0 border-b border-slate-800 px-2 bg-slate-950/80" style={{ maxHeight: 200 }}>
+                <PnLChart trades={filteredRows} />
+              </div>
+            )}
+
+            {/* ── Stats bar ── */}
+            {stats && (
+              <div className="flex-shrink-0 flex items-center gap-5 px-5 py-1.5 border-b border-slate-800 bg-slate-900/40 overflow-x-auto" style={{ fontSize: 11 }}>
+                <span style={{ color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>{stats.count} closed</span>
+                <span style={{ color: stats.winRate >= 0.5 ? '#34d399' : '#f87171', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  Win {(stats.winRate * 100).toFixed(0)}%
+                </span>
+                <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>Avg W <span style={{ color: '#34d399' }}>{dollar(stats.avgWin, { sign: true })}</span></span>
+                <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>Avg L <span style={{ color: '#f87171' }}>{dollar(stats.avgLoss, { sign: true })}</span></span>
+                <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>Best <span style={{ color: '#34d399' }}>{dollar(stats.largestWin, { sign: true })}</span></span>
+                <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>Worst <span style={{ color: '#f87171' }}>{dollar(stats.largestLoss, { sign: true })}</span></span>
+              </div>
+            )}
+
             {/* ── Open Positions ── */}
             <div className="flex-shrink-0 border-b border-slate-800" style={{ height: openRows.length > 0 ? Math.min(openRows.length * 44 + 34 + 28, 320) : 28 }}>
               <div className="flex items-center gap-2 px-4" style={{ height: 28, background: 'rgba(52,211,153,0.04)', borderBottom: openRows.length > 0 ? '1px solid #1e293b' : 'none' }}>
@@ -942,6 +1097,14 @@ export function TradesPanel({ activeAccountId }: Props) {
                     headerHeight={34}
                     animateRows
                     context={openGridCtx}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    getRowStyle={(p: any) => {
+                      if (p.data?.assetType !== 'option' || !p.data.expiration) return undefined;
+                      const dte = dteFromExpiry(p.data.expiration);
+                      if (dte <= 7)  return { background: 'rgba(239,68,68,0.10)', borderLeft: '3px solid rgba(239,68,68,0.5)' };
+                      if (dte <= 14) return { background: 'rgba(245,158,11,0.07)', borderLeft: '3px solid rgba(245,158,11,0.4)' };
+                      return undefined;
+                    }}
                   />
                 </div>
               )}
@@ -994,7 +1157,7 @@ export function TradesPanel({ activeAccountId }: Props) {
       )}
 
       {showAdd    && <AddTradeModal  onClose={() => setShowAdd(false)}   onAdd={handleAdd}       />}
-      {showImport && <ImportModal    onClose={() => setShowImport(false)} onImport={handleImport} />}
+      {showImport && <ImportModal    onClose={() => setShowImport(false)} onImport={handleImport} existingTrades={trades} />}
       {closingTrade && (
         <ClosePositionModal
           trade={closingTrade}
