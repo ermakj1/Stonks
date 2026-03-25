@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { ModuleRegistry, AllCommunityModule, themeBalham, type ColDef } from 'ag-grid-community';
-import type { Trade, TradeAction } from '../types';
+import type { Trade, TradeAction, UnrealizedPosition } from '../types';
 import { PnLChart } from './PnLChart';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -203,6 +203,12 @@ function buildFIFOPnL(trades: Trade[]): Map<string, number> {
   return pnlMap;
 }
 
+function posKey(t: { ticker: string; assetType: string; optionType?: string; strike?: number; expiration?: string }): string {
+  return t.assetType === 'option'
+    ? `${t.ticker}-${t.optionType}-${t.strike}-${t.expiration}`
+    : `${t.ticker}-stock`;
+}
+
 // ── cell renderers ────────────────────────────────────────────────────
 
 function ActionCell({ value }: { value: TradeAction }) {
@@ -241,6 +247,24 @@ function PnLCell({ value }: { value: number | null }) {
   if (value == null) return <span style={{ color: '#475569' }}>—</span>;
   const color = value >= 0 ? '#34d399' : '#f87171';
   return <span style={{ color, fontWeight: 600 }}>{dollar(value, { sign: true })}</span>;
+}
+
+function CurrentPriceCell({ data, context }: { data: Trade; context: { unrealizedMap?: Map<string, UnrealizedPosition> } }) {
+  if (!data) return null;
+  const pos = context.unrealizedMap?.get(posKey(data));
+  if (!pos) return <span style={{ color: '#334155' }}>—</span>;
+  if (pos.currentPrice == null) return <span style={{ color: '#475569', fontSize: 11 }}>…</span>;
+  return <span style={{ color: '#e2e8f0', fontWeight: 500 }}>{data.assetType === 'option' ? `$${pos.currentPrice.toFixed(2)}/c` : `$${pos.currentPrice.toFixed(2)}`}</span>;
+}
+
+function UnrealizedCell({ data, context }: { data: Trade; context: { unrealizedMap?: Map<string, UnrealizedPosition> } }) {
+  if (!data) return null;
+  const pos = context.unrealizedMap?.get(posKey(data));
+  if (!pos) return <span style={{ color: '#334155' }}>—</span>;
+  if (pos.unrealizedGain == null) return <span style={{ color: '#475569', fontSize: 11 }}>…</span>;
+  const color = pos.unrealizedGain >= 0 ? '#34d399' : '#f87171';
+  const pct = pos.unrealizedGainPct != null ? ` (${pos.unrealizedGainPct >= 0 ? '+' : ''}${pos.unrealizedGainPct.toFixed(1)}%)` : '';
+  return <span style={{ color, fontWeight: 600 }}>{dollar(pos.unrealizedGain, { sign: true })}{pct}</span>;
 }
 
 function CloseCell({ data, context }: { data: Trade; context: { onClosePosition: (trade: Trade) => void } }) {
@@ -852,8 +876,10 @@ export function TradesPanel({ activeAccountId }: Props) {
   const [showAdd, setShowAdd]             = useState(false);
   const [showImport, setShowImport]       = useState(false);
   const [dateRange, setDateRange]         = useState<DateRange>('all');
-  const [closingTrade, setClosingTrade]   = useState<Trade | null>(null);
-  const [showChart, setShowChart]         = useState(false);
+  const [closingTrade, setClosingTrade]         = useState<Trade | null>(null);
+  const [showChart, setShowChart]               = useState(false);
+  const [unrealizedPositions, setUnrealizedPositions] = useState<UnrealizedPosition[]>([]);
+  const [unrealizedLoading, setUnrealizedLoading]     = useState(false);
 
   const fetchTrades = useCallback(async () => {
     setLoading(true);
@@ -869,6 +895,20 @@ export function TradesPanel({ activeAccountId }: Props) {
   }, []);
 
   useEffect(() => { fetchTrades(); }, [fetchTrades, activeAccountId]);
+
+  const fetchUnrealized = useCallback(async () => {
+    setUnrealizedLoading(true);
+    try {
+      const res = await fetch('/api/positions/unrealized');
+      const data: unknown = await res.json();
+      setUnrealizedPositions(Array.isArray(data) ? (data as UnrealizedPosition[]) : []);
+    } catch {
+      // silently fail — unrealized is best-effort
+    } finally {
+      setUnrealizedLoading(false);
+    }
+  }, []);
+
 
   const handleAdd = useCallback(async (trade: Omit<Trade, 'id'>) => {
     await fetch('/api/trades', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trade) });
@@ -893,8 +933,9 @@ export function TradesPanel({ activeAccountId }: Props) {
     setClosingTrade(trade);
   }, []);
 
-  const gridCtx     = useMemo(() => ({ onDelete: handleDelete }), [handleDelete]);
-  const openGridCtx = useMemo(() => ({ onDelete: handleDelete, onClosePosition: handleClosePosition }), [handleDelete, handleClosePosition]);
+  const gridCtx       = useMemo(() => ({ onDelete: handleDelete }), [handleDelete]);
+  const unrealizedMap = useMemo(() => new Map(unrealizedPositions.map(p => [p.id, p])), [unrealizedPositions]);
+  const openGridCtx   = useMemo(() => ({ onDelete: handleDelete, onClosePosition: handleClosePosition, unrealizedMap }), [handleDelete, handleClosePosition, unrealizedMap]);
 
   const fifoMap   = useMemo(() => buildFIFOPnL(trades), [trades]);
 
@@ -915,6 +956,12 @@ export function TradesPanel({ activeAccountId }: Props) {
 
   const openRows   = useMemo(() => filteredRows.filter(r => r._isOpen), [filteredRows]);
   const closedRows = useMemo(() => filteredRows.filter(r => !r._isOpen), [filteredRows]);
+
+  // Fetch unrealized prices whenever open positions change
+  useEffect(() => {
+    if (openRows.length > 0) fetchUnrealized();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRows.length, activeAccountId]);
 
   // Summary footer (reflects filtered view)
   const totalRealized = useMemo(() => filteredRows.reduce((s, r) => s + (r.pnl ?? 0), 0), [filteredRows]);
@@ -944,7 +991,9 @@ export function TradesPanel({ activeAccountId }: Props) {
     { field: 'qty',    headerName: 'Qty',     width: 70,  valueFormatter: p => p.value?.toLocaleString() },
     { field: 'price',  headerName: 'Price',   width: 88,  valueFormatter: p => p.data ? (p.data.assetType === 'option' ? `$${p.value?.toFixed(2)}/c` : `$${p.value?.toFixed(2)}`) : '' },
     { field: 'total',  headerName: 'Total',   width: 110, cellRenderer: TotalCell },
-    { field: 'notes',  headerName: 'Notes',   flex: 1, minWidth: 80, cellStyle: { color: '#64748b', fontSize: '12px' } },
+    { headerName: 'Current',    width: 100, sortable: false, cellRenderer: CurrentPriceCell },
+    { headerName: 'Unrealized', width: 155, sortable: false, cellRenderer: UnrealizedCell },
+    { field: 'notes',  headerName: 'Notes',   flex: 1, minWidth: 60, cellStyle: { color: '#64748b', fontSize: '12px' } },
     { headerName: 'DTE', width: 60, sortable: true, resizable: true, suppressHeaderMenuButton: true,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       valueGetter: (p: any) => p.data?.assetType === 'option' && p.data.expiration ? dteFromExpiry(p.data.expiration) : null,
@@ -1085,6 +1134,7 @@ export function TradesPanel({ activeAccountId }: Props) {
               <div className="flex items-center gap-2 px-4" style={{ height: 28, background: 'rgba(52,211,153,0.04)', borderBottom: openRows.length > 0 ? '1px solid #1e293b' : 'none' }}>
                 <span style={{ fontSize: 10, fontWeight: 700, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Open Positions</span>
                 <span style={{ fontSize: 10, color: '#475569', fontWeight: 600 }}>{openRows.length}</span>
+                {unrealizedLoading && <span style={{ fontSize: 9, color: '#334155', fontStyle: 'italic' }}>fetching prices…</span>}
               </div>
               {openRows.length > 0 && (
                 <div style={{ height: Math.min(openRows.length * 44 + 34, 292) }}>
