@@ -9,12 +9,22 @@ interface Props {
   providerKeys: Record<string, boolean>;
   holdings: Holdings | null;
   strategy: string;
+  activeAccountId: string | null;
   onHoldingsUpdated: () => void;
   onStrategyUpdated: () => void;
   onOpenChain?: (ticker: string, highlights: OptionSuggestion[]) => void;
 }
 
 const FILE_UPDATE_RE = /<<<FILE_UPDATE>>>([\s\S]*?)<<<END_FILE_UPDATE>>>/;
+
+const WELCOME_MESSAGE: Message = {
+  id: 'welcome',
+  role: 'assistant',
+  content: "Hi! I'm your AI trading assistant. I have full context of your holdings, strategy, and live market prices. Ask me anything about your portfolio, or tell me to update your holdings or strategy.",
+};
+const AI_CONTEXT_MESSAGES = 20; // last N messages sent to AI (10 turns)
+const MAX_STORED_MESSAGES = 200;
+const storageKey = (id: string | null) => id ? `stonks_chat_${id}` : null;
 const OPTION_SUGGESTION_RE = /<<<OPTION_SUGGESTION>>>([\s\S]*?)<<<END_OPTION_SUGGESTION>>>/g;
 
 function extractFileUpdate(text: string): { clean: string; update: FileUpdate | null } {
@@ -51,14 +61,8 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () =
   );
 }
 
-export function Chat({ provider, model, providerKeys, holdings, strategy, onHoldingsUpdated, onStrategyUpdated, onOpenChain }: Props) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      content: "Hi! I'm your AI trading assistant. I have full context of your holdings, strategy, and live market prices. Ask me anything about your portfolio, or tell me to update your holdings or strategy.",
-    },
-  ]);
+export function Chat({ provider, model, providerKeys, holdings, strategy, activeAccountId, onHoldingsUpdated, onStrategyUpdated, onOpenChain }: Props) {
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingUpdate, setPendingUpdate] = useState<FileUpdate | null>(null);
@@ -66,6 +70,37 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
   const [includeHistory, setIncludeHistory] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Load history from localStorage when account changes
+  useEffect(() => {
+    const key = storageKey(activeAccountId);
+    if (!key) { setMessages([WELCOME_MESSAGE]); return; }
+    try {
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        const parsed = JSON.parse(stored) as Message[];
+        setMessages(parsed.filter(m => !m.streaming).length > 0 ? parsed.filter(m => !m.streaming) : [WELCOME_MESSAGE]);
+      } else {
+        setMessages([WELCOME_MESSAGE]);
+      }
+    } catch {
+      setMessages([WELCOME_MESSAGE]);
+    }
+  }, [activeAccountId]);
+
+  // Persist history to localStorage after each completed exchange
+  useEffect(() => {
+    const key = storageKey(activeAccountId);
+    if (!key || isStreaming) return;
+    const toStore = messages.filter(m => !m.streaming).slice(-MAX_STORED_MESSAGES);
+    try { localStorage.setItem(key, JSON.stringify(toStore)); } catch {}
+  }, [messages, isStreaming, activeAccountId]);
+
+  const clearHistory = useCallback(() => {
+    setMessages([WELCOME_MESSAGE]);
+    const key = storageKey(activeAccountId);
+    if (key) localStorage.removeItem(key);
+  }, [activeAccountId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -94,10 +129,10 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
     setIsStreaming(true);
 
     try {
-      const chatMessages = [...messages, userMessage].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      const chatMessages = [...messages, userMessage]
+        .filter(m => !m.streaming)
+        .slice(-AI_CONTEXT_MESSAGES)
+        .map(m => ({ role: m.role, content: m.content }));
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -380,6 +415,7 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, onHold
           <Toggle checked={includeHoldings} onChange={() => setIncludeHoldings(v => !v)} label="Holdings" />
           <Toggle checked={includeHistory} onChange={() => setIncludeHistory(v => !v)} label="Trade History" />
           <span className="flex-1" />
+          <button onClick={clearHistory} className="text-[10px] text-slate-600 hover:text-slate-400 transition-colors">Clear history</button>
           <p className="text-[10px] text-slate-600">Enter to send · Shift+Enter for new line</p>
         </div>
       </div>

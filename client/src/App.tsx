@@ -248,6 +248,7 @@ export default function App() {
                 providerKeys={providerKeys}
                 holdings={holdings}
                 strategy={strategy}
+                activeAccountId={activeAccount?.id ?? null}
                 onHoldingsUpdated={handleHoldingsUpdated}
                 onStrategyUpdated={handleStrategyUpdated}
                 onOpenChain={handleOpenChain}
