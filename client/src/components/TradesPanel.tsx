@@ -348,7 +348,101 @@ export interface ParsedImportRow {
   duplicate: boolean;
 }
 
+// ── Schwab web copy-paste parser ─────────────────────────────────────
+// Handles the block format copied from the Schwab website:
+//   Apr-21-2026
+//   Main ***8880
+//   Sell to Open
+//   3 Contracts MSFT Jun 18 2026 470 Calls Net Debit at $0.15 (Day)
+//   Filled at $8.38
+//   $2,511.92
+
+const MONTH_ABB: Record<string, string> = {
+  jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+  jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12',
+};
+
+function parseSchwabBlockDate(s: string): string | null {
+  const m = s.match(/^([A-Za-z]{3})-(\d{1,2})-(\d{4})$/);
+  if (!m) return null;
+  const mo = MONTH_ABB[m[1].toLowerCase()];
+  return mo ? `${m[3]}-${mo}-${m[2].padStart(2, '0')}` : null;
+}
+
+function parseSchwabWebText(text: string): ParsedImportRow[] {
+  const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  const rows: ParsedImportRow[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const date = parseSchwabBlockDate(lines[i]);
+    if (!date) { i++; continue; }
+
+    // Need at least 5 more lines for a complete block
+    if (i + 5 > lines.length) break;
+
+    // line i+1: account — skip
+    const actionRaw = (lines[i + 2] ?? '').toLowerCase();
+    const details   =  lines[i + 3] ?? '';
+    const filledRaw =  lines[i + 4] ?? '';
+
+    const filledMatch = filledRaw.match(/filled at \$([0-9,.]+)/i);
+    if (!filledMatch) { i++; continue; }
+    const price = parseFloat(filledMatch[1].replace(/,/g, ''));
+
+    // Map action string → TradeAction
+    let action: TradeAction;
+    if      (actionRaw.includes('buy to close'))  action = 'close';
+    else if (actionRaw.includes('sell to open'))  action = 'open';
+    else if (actionRaw.includes('buy to open'))   action = 'open';
+    else if (actionRaw.includes('sell to close')) action = 'close';
+    else if (actionRaw.startsWith('buy'))         action = 'buy';
+    else if (actionRaw.startsWith('sell'))        action = 'sell';
+    else { i++; continue; }
+
+    // Options: "3 Contracts MSFT Jun 18 2026 470 Calls ..."
+    const optM = details.match(
+      /^(\d+)\s+contracts?\s+([A-Z]+)\s+([A-Za-z]+)\s+(\d{1,2})\s+(\d{4})\s+(\d+(?:\.\d+)?)\s+(calls?|puts?)/i
+    );
+    if (optM) {
+      const [, qtyStr, ticker, mon, day, year, strikeStr, typeStr] = optM;
+      const mo = MONTH_ABB[mon.toLowerCase()];
+      if (mo) {
+        const expiration = `${year}-${mo}-${day.padStart(2, '0')}`;
+        const optionType: 'call' | 'put' = typeStr[0].toLowerCase() === 'c' ? 'call' : 'put';
+        rows.push({
+          rawSymbol: `${ticker}${year.slice(2)}${mo}${day.padStart(2,'0')}${optionType === 'call' ? 'C' : 'P'}${strikeStr}`,
+          commission: 0, fees: 0, amount: 0, selected: true, duplicate: false,
+          parsed: { date, action, ticker, assetType: 'option', optionType,
+                    strike: parseFloat(strikeStr), expiration,
+                    qty: parseInt(qtyStr), price, notes: '' },
+        });
+      }
+    } else {
+      // Stocks: "10 Shares MSFT ..." or "10 MSFT ..."
+      const stkM = details.match(/^(\d+)\s+(?:shares?\s+)?([A-Z]{1,6})/i);
+      if (stkM) {
+        const ticker = stkM[2].toUpperCase();
+        const stockAction: TradeAction = action === 'open' ? 'buy' : action === 'close' ? 'sell' : action;
+        rows.push({
+          rawSymbol: ticker,
+          commission: 0, fees: 0, amount: 0, selected: true, duplicate: false,
+          parsed: { date, action: stockAction, ticker, assetType: 'stock',
+                    qty: parseInt(stkM[1]), price, notes: '' },
+        });
+      }
+    }
+
+    i += 6;
+  }
+  return rows;
+}
+
 export function parseBrokerText(text: string): ParsedImportRow[] {
+  // Auto-detect format: Schwab web blocks contain "Filled at $" lines
+  if (/filled at \$/i.test(text)) return parseSchwabWebText(text);
+
+  // ── Tab-separated format (Schwab CSV export, etc.) ────────────────
   const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
   const rows: ParsedImportRow[] = [];
 
@@ -483,7 +577,7 @@ function ImportModal({ onClose, onImport, existingTrades }: ImportModalProps) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 flex-shrink-0">
           <div>
             <span className="text-sm font-semibold text-white">Import Trades</span>
-            <span className="text-xs text-slate-500 ml-3">Paste broker export (tab-separated)</span>
+            <span className="text-xs text-slate-500 ml-3">Paste broker history — auto-detects format</span>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', lineHeight: 1 }}
             onMouseEnter={e => (e.currentTarget.style.color = '#e2e8f0')} onMouseLeave={e => (e.currentTarget.style.color = '#64748b')}>
@@ -498,7 +592,7 @@ function ImportModal({ onClose, onImport, existingTrades }: ImportModalProps) {
           <textarea
             value={raw}
             onChange={e => setRaw(e.target.value)}
-            placeholder={'Paste your broker transaction history here…\n\nSupports tab-separated formats (Schwab, etc.).\nInclude or exclude the header row — both work.'}
+            placeholder={'Paste your broker transaction history here…\n\nSupports:\n• Fidelity / Schwab web copy-paste (block format)\n• Tab-separated CSV export\n\nFormat is auto-detected.'}
             className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2.5 text-xs text-slate-300 font-mono resize-none focus:outline-none focus:border-slate-500"
             style={{ height: 100 }}
             spellCheck={false}
