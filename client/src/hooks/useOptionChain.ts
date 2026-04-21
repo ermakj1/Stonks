@@ -7,16 +7,41 @@ export type ExpiryFreq = 'daily' | 'weekly' | 'monthly';
 /**
  * Classify an expiry timestamp.
  * Monthly  = 3rd Friday of the month (date 15–21, Friday)
+ *            OR Thursday date 14–20 when the following Friday is a market holiday
+ *            (e.g. Jun 18 2026 when Jun 19 = Juneteenth)
  * Weekly   = any other Friday
- * Daily    = Mon–Thu (0-DTE or near-term dailies)
+ * Daily    = Mon–Thu that isn't a holiday-shifted monthly
  */
 export function getExpiryType(ts: number): ExpiryFreq {
   const d = new Date(ts * 1000);
   const dow  = d.getUTCDay();   // 0=Sun … 5=Fri … 6=Sat
-  if (dow !== 5) return 'daily';
   const date = d.getUTCDate();
-  if (date >= 15 && date <= 21) return 'monthly';
-  return 'weekly';
+
+  if (dow === 5) {
+    return (date >= 15 && date <= 21) ? 'monthly' : 'weekly';
+  }
+
+  // Thursday in the 3rd-week window whose next day (Friday) is a US market holiday
+  if (dow === 4 && date >= 14 && date <= 20) {
+    const nextDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), date + 1));
+    if (isMarketHoliday(nextDay)) return 'monthly';
+  }
+
+  return 'daily';
+}
+
+// US market holidays that can fall on a Friday and shift monthly expiry to Thursday.
+// Add years as needed — only Fridays matter for monthly expiry shifts.
+const MARKET_HOLIDAYS = new Set([
+  '2026-06-19', // Juneteenth
+  '2026-07-03', // Independence Day observed (Jul 4 = Saturday → Friday Jul 3 off)
+  '2027-06-18', // Juneteenth observed (Jun 19 = Saturday → Friday Jun 18 off) — check
+  '2028-07-03', // add as needed
+]);
+
+function isMarketHoliday(d: Date): boolean {
+  const iso = d.toISOString().slice(0, 10);
+  return MARKET_HOLIDAYS.has(iso);
 }
 
 export interface OptionFilters {
