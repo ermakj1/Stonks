@@ -1020,7 +1020,8 @@ export function TradesPanel({ activeAccountId, onHoldingsUpdated }: Props) {
       body: JSON.stringify(imported),
     });
     await fetchTrades();
-  }, [fetchTrades]);
+    onHoldingsUpdated?.();
+  }, [fetchTrades, onHoldingsUpdated]);
 
   const handleDelete = useCallback(async (id: string) => {
     await fetch(`/api/trades/${id}`, { method: 'DELETE' });
