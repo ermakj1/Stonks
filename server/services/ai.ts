@@ -19,8 +19,9 @@ const getGeminiClient    = () => new GoogleGenerativeAI(process.env.GEMINI_API_K
 const TOOL_DESCRIPTION = `Fetch a filtered options chain for a stock ticker. Use this when the user asks about options trades, wants to find contracts, or when you need current option prices to make a recommendation.
 
 Returns contracts with: strike, expiry, DTE, bid/ask/mid price, IV%, delta, volume, and open interest.
-Tips for getting the right contracts:
-- When hunting a specific delta zone (e.g. 0.15Δ), set type="calls" or type="puts" and raise max_results to 60-80 so the full strike range is returned.
+Rules:
+- Always set type to "calls" OR "puts" — never omit it. Calls and puts are fetched separately.
+- Raise max_results to 60-80 when hunting a specific strike or delta zone to ensure the full range is returned.
 - Use otm_only=true (default) for covered calls / CSPs; set otm_only=false if you need ATM or ITM strikes.
 - Widen dte_max if the target expiry falls outside the default 90-day window.`;
 
@@ -31,13 +32,13 @@ const ANTHROPIC_TOOLS: Anthropic.Tool[] = [{
     type: 'object' as const,
     properties: {
       ticker:      { type: 'string',  description: 'Stock ticker e.g. AAPL, MSFT' },
-      type:        { type: 'string',  description: 'Option type: "calls", "puts", or "both". Default: both' },
+      type:        { type: 'string',  description: 'Option type: "calls" or "puts". Always specify — never omit. Use "calls" for covered calls / bullish plays, "puts" for cash-secured puts / bearish plays.' },
       dte_min:     { type: 'number',  description: 'Min days to expiration. Default: 20' },
       dte_max:     { type: 'number',  description: 'Max days to expiration. Default: 90' },
       otm_only:    { type: 'boolean', description: 'Only return out-of-the-money options. Default: true' },
       max_results: { type: 'number',  description: 'Max contracts to return. Default: 40, max: 120. Use 60-80 when hunting a specific strike or delta zone.' },
     },
-    required: ['ticker'],
+    required: ['ticker', 'type'],
   },
 }];
 
@@ -49,13 +50,13 @@ const GEMINI_TOOLS = [{
       type: SchemaType.OBJECT,
       properties: {
         ticker:      { type: SchemaType.STRING,  description: 'Stock ticker e.g. AAPL, MSFT' },
-        type:        { type: SchemaType.STRING,  description: 'Option type: "calls", "puts", or "both". Default: both' },
+        type:        { type: SchemaType.STRING,  description: 'Option type: "calls" or "puts". Always specify — never omit.' },
         dte_min:     { type: SchemaType.NUMBER,  description: 'Min days to expiration. Default: 20' },
         dte_max:     { type: SchemaType.NUMBER,  description: 'Max days to expiration. Default: 90' },
         otm_only:    { type: SchemaType.BOOLEAN, description: 'Only OTM options. Default: true' },
         max_results: { type: SchemaType.NUMBER,  description: 'Max contracts. Default: 40, max: 120. Use 60-80 when hunting a specific strike or delta zone.' },
       },
-      required: ['ticker'],
+      required: ['ticker', 'type'],
     },
   }],
 }];

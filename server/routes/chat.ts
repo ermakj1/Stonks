@@ -287,7 +287,11 @@ function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
     const ticker = String(input.ticker ?? '').toUpperCase();
     if (!ticker) return 'Error: ticker is required';
 
-    const type       = String(input.type ?? 'both') as 'calls' | 'puts' | 'both';
+    const rawType = String(input.type ?? '');
+    if (rawType !== 'calls' && rawType !== 'puts') {
+      return 'Error: type must be "calls" or "puts". Re-call with type specified.';
+    }
+    const type = rawType as 'calls' | 'puts';
     const dteMin     = Number(input.dte_min     ?? 20);
     const dteMax     = Number(input.dte_max     ?? 90);
     const otmOnly    = input.otm_only !== false;
