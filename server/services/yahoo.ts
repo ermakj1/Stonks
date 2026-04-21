@@ -14,6 +14,9 @@ export interface StockQuote {
   changePercent: number;
   volume: number;
   marketCap?: number;
+  dividendRate?: number;   // annual $ per share
+  dividendYield?: number;  // decimal, e.g. 0.007 = 0.7%
+  exDividendDate?: string; // YYYY-MM-DD
 }
 
 export interface OptionsData {
@@ -120,13 +123,74 @@ async function fetchHV30(ticker: string): Promise<number | null> {
   }
 }
 
+// ── Dividend data ─────────────────────────────────────────────────────
+
+const divCache = new Map<string, { ts: number; rate: number; yield: number; exDivDate?: string }>();
+const DIV_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+async function fetchDividendData(ticker: string): Promise<{ rate: number; yield: number; exDivDate?: string }> {
+  const hit = divCache.get(ticker);
+  if (hit && Date.now() - hit.ts < DIV_TTL) return hit;
+
+  try {
+    const url = `${YF_BASE}/${ticker}?interval=1d&range=1y&events=dividends`;
+    const res = await fetch(url, { headers: HEADERS });
+    if (!res.ok) return { rate: 0, yield: 0 };
+
+    const json = await res.json() as {
+      chart: {
+        result: Array<{
+          meta: { regularMarketPrice: number };
+          events?: { dividends?: Record<string, { amount: number; date: number }> };
+        }> | null;
+      };
+    };
+
+    const result = json?.chart?.result?.[0];
+    if (!result) return { rate: 0, yield: 0 };
+
+    const price = result.meta.regularMarketPrice ?? 0;
+    const allDivs = Object.values(result.events?.dividends ?? {});
+    const oneYearAgo = Date.now() / 1000 - 365 * 24 * 60 * 60;
+    const recent = allDivs.filter(d => d.date >= oneYearAgo);
+    const annualRate = recent.reduce((s, d) => s + d.amount, 0);
+
+    // Most recent ex-div date for display
+    const lastDiv = allDivs.sort((a, b) => b.date - a.date)[0];
+    const exDivDate = lastDiv
+      ? new Date(lastDiv.date * 1000).toISOString().split('T')[0]
+      : undefined;
+
+    const data = {
+      ts: Date.now(),
+      rate: annualRate,
+      yield: price > 0 ? annualRate / price : 0,
+      exDivDate,
+    };
+    divCache.set(ticker, data);
+    return data;
+  } catch {
+    return { rate: 0, yield: 0 };
+  }
+}
+
 export async function getStockQuotes(tickers: string[]): Promise<StockQuote[]> {
-  // Stagger requests slightly to be polite
   const results: StockQuote[] = [];
   for (const ticker of tickers) {
     results.push(await fetchQuote(ticker));
     if (tickers.length > 1) await new Promise((r) => setTimeout(r, 200));
   }
+
+  // Enrich with dividend data in parallel (cached, won't slow price display)
+  await Promise.all(results.map(async (q) => {
+    const div = await fetchDividendData(q.ticker);
+    if (div.rate > 0) {
+      q.dividendRate = div.rate;
+      q.dividendYield = div.yield;
+      q.exDividendDate = div.exDivDate;
+    }
+  }));
+
   return results;
 }
 

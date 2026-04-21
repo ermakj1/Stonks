@@ -4,8 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { streamChat, type AIProvider, type ChatMessage, type ToolExecutor } from '../services/ai.js';
 import { getAllPrices, type StockQuote, type OptionsData } from '../services/yahoo.js';
-import { getFilteredChain } from '../services/cboe.js';
-import { getActiveAccountId, readAccount, type Trade } from '../services/accounts.js';
+import { getFilteredChain, getOptionMid } from '../services/cboe.js';
+import { getActiveAccountId, readAccount, buildOpenPositions, type Trade } from '../services/accounts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT_PATH = path.resolve(__dirname, '../../data/system_prompt.md');
@@ -95,12 +95,25 @@ function fmtTradeHistory(trades: Trade[]): string {
   return `${statsLine}${lines}`;
 }
 
+interface OpenPositionWithPrice {
+  id: string;
+  ticker: string;
+  assetType: 'stock' | 'option';
+  optionType?: string;
+  strike?: number;
+  expiration?: string;
+  notes: string;
+  netQty: number;
+  avgCostBasis: number;
+  currentMid?: number | null;
+}
+
 function buildSystemPrompt(
   persona: string,
   strategy: string,
   holdings: Holdings,
   prices: { stocks: StockQuote[]; options: OptionsData[] },
-  flags?: { includeHoldings?: boolean; recentTrades?: Trade[] }
+  flags?: { includeHoldings?: boolean; recentTrades?: Trade[]; openPositions?: OpenPositionWithPrice[] }
 ): string {
   const includeHoldings = flags?.includeHoldings !== false;
   const priceMap = new Map(prices.stocks.map((s) => [s.ticker, s]));
@@ -188,6 +201,35 @@ ${section(watchedOptions.map(fmtWatchedOption))}` : `
 ## Holdings
 (Holdings context disabled for this message)`;
 
+  const fmtOpenPosition = (p: OpenPositionWithPrice) => {
+    if (p.assetType === 'option') {
+      const premium = p.avgCostBasis;
+      const mid = p.currentMid;
+      const gainDollar = mid != null ? (premium - mid) * p.netQty * 100 : null;
+      const gainPct = gainDollar != null && premium > 0 ? (gainDollar / (premium * p.netQty * 100)) * 100 : null;
+      return [
+        `  ${p.ticker} ${(p.optionType ?? '').toUpperCase()} $${p.strike} exp ${p.expiration} x${p.netQty} contracts (SHORT / sold)`,
+        `    Premium received: $${premium.toFixed(2)}/contract`,
+        mid != null ? `    Current mid: $${mid.toFixed(2)}` : '    Current mid: N/A',
+        gainDollar != null ? `    Unrealized P&L: $${gainDollar.toFixed(2)} (${gainPct?.toFixed(1)}%)` : '',
+        p.notes ? `    Strategic intent: ${p.notes}` : '',
+      ].filter(Boolean).join('\n');
+    }
+    const q = prices.stocks.find(s => s.ticker === p.ticker);
+    const currentPrice = q?.price ?? 0;
+    const gain = (currentPrice - p.avgCostBasis) * p.netQty;
+    return [
+      `  ${p.ticker}: ${p.netQty} shares @ avg cost $${p.avgCostBasis.toFixed(2)}`,
+      `    Current: $${currentPrice.toFixed(2)}`,
+      `    Unrealized P&L: $${gain.toFixed(2)}`,
+      p.notes ? `    Strategic intent: ${p.notes}` : '',
+    ].filter(Boolean).join('\n');
+  };
+
+  const openPositionsSection = flags?.openPositions?.length
+    ? `\n## Open Positions (from Trade History)\nNote: each position may include a "Strategic intent" note — read these to understand how the position aligns with the overall strategy before giving advice.\n\n${flags.openPositions.map(fmtOpenPosition).join('\n\n')}`
+    : '';
+
   const historySection = flags?.recentTrades
     ? `\n## Recent Trade History\n${fmtTradeHistory(flags.recentTrades)}`
     : '';
@@ -197,6 +239,7 @@ ${section(watchedOptions.map(fmtWatchedOption))}` : `
 ## Trading Strategy
 ${strategy}
 ${holdingsSection}
+${openPositionsSection}
 ${historySection}
 
 ## CRITICAL RULE — YOU MUST FOLLOW THIS EVERY TIME
@@ -248,7 +291,7 @@ function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
     const dteMin     = Number(input.dte_min     ?? 20);
     const dteMax     = Number(input.dte_max     ?? 90);
     const otmOnly    = input.otm_only !== false;
-    const maxResults = Math.min(Number(input.max_results ?? 25), 50);
+    const maxResults = Math.min(Number(input.max_results ?? 40), 80);
 
     const underlyingPrice = priceMap.get(ticker)?.price;
 
@@ -295,7 +338,13 @@ chatRouter.get('/context', async (_req, res) => {
     const account = await readAccount(accountId);
     const holdings = account.holdings as Holdings;
     const prices = await getAllPrices(holdings);
-    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices, { includeHoldings: true });
+    const openPositionsMap = buildOpenPositions(account.trades ?? []);
+    const openPositions: OpenPositionWithPrice[] = [...openPositionsMap.entries()].map(([id, pos]) => {
+      const netQty = pos.lots.reduce((s, l) => s + l.qty, 0);
+      const totalCost = pos.lots.reduce((s, l) => s + l.price * l.qty, 0);
+      return { id, ticker: pos.ticker, assetType: pos.assetType, optionType: pos.optionType, strike: pos.strike, expiration: pos.expiration, notes: pos.notes, netQty, avgCostBasis: netQty > 0 ? totalCost / netQty : 0, currentMid: null };
+    });
+    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices, { includeHoldings: true, openPositions });
 
     res.json({ systemPrompt, prices, holdings });
   } catch (err) {
@@ -329,7 +378,29 @@ chatRouter.post('/', async (req, res) => {
     const prices = await getAllPrices(holdings);
     const priceMap = new Map(prices.stocks.map(s => [s.ticker, s]));
     const recentTrades = includeHistory ? (account.trades ?? []) : undefined;
-    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices, { includeHoldings, recentTrades });
+
+    // Build open positions from trade history with live prices
+    const openPositionsMap = buildOpenPositions(account.trades ?? []);
+    const openPositions: OpenPositionWithPrice[] = await Promise.all(
+      [...openPositionsMap.entries()].map(async ([id, pos]) => {
+        const netQty = pos.lots.reduce((s, l) => s + l.qty, 0);
+        const totalCost = pos.lots.reduce((s, l) => s + l.price * l.qty, 0);
+        const avgCostBasis = netQty > 0 ? totalCost / netQty : 0;
+        let currentMid: number | null = null;
+        if (pos.assetType === 'option' && pos.optionType && pos.strike != null && pos.expiration) {
+          try {
+            const mid = await Promise.race([
+              getOptionMid(pos.ticker, pos.optionType, pos.strike, pos.expiration),
+              new Promise<null>(resolve => setTimeout(() => resolve(null), 4000)),
+            ]);
+            currentMid = mid?.mid ?? null;
+          } catch { /* leave null */ }
+        }
+        return { id, ticker: pos.ticker, assetType: pos.assetType, optionType: pos.optionType, strike: pos.strike, expiration: pos.expiration, notes: pos.notes, netQty, avgCostBasis, currentMid };
+      })
+    );
+
+    const systemPrompt = buildSystemPrompt(personaRaw, account.strategy, holdings, prices, { includeHoldings, recentTrades, openPositions });
     const toolExecutor = makeToolExecutor(priceMap);
 
     await streamChat(messages, systemPrompt, provider, res, toolExecutor, model);

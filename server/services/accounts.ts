@@ -102,6 +102,53 @@ export async function createAccount(name: string): Promise<Account> {
   return account;
 }
 
+export interface OpenPositionEntry {
+  ticker: string;
+  assetType: 'stock' | 'option';
+  optionType?: string;
+  strike?: number;
+  expiration?: string;
+  notes: string;
+  lastOpenTradeId: string;
+  lots: { price: number; qty: number }[];
+}
+
+export function buildOpenPositions(trades: Trade[]): Map<string, OpenPositionEntry> {
+  const sorted = [...trades].sort((a, b) => a.date.localeCompare(b.date));
+  const positions = new Map<string, OpenPositionEntry>();
+
+  function lotKey(t: Trade): string {
+    return t.assetType === 'option'
+      ? `${t.ticker}-${t.optionType}-${t.strike}-${t.expiration}`
+      : `${t.ticker}-stock`;
+  }
+
+  for (const t of sorted) {
+    const key = lotKey(t);
+    if (t.action === 'open' || (t.action === 'buy' && t.assetType === 'stock')) {
+      const existing = positions.get(key) ?? { ticker: t.ticker, assetType: t.assetType, optionType: t.optionType, strike: t.strike, expiration: t.expiration, notes: '', lastOpenTradeId: '', lots: [] };
+      existing.lots.push({ price: t.price, qty: t.qty });
+      existing.lastOpenTradeId = t.id;
+      if (t.notes) existing.notes = t.notes; // last opening trade's notes win
+      positions.set(key, existing);
+    } else if (t.action === 'close' || t.action === 'expired' || t.action === 'assigned' || (t.action === 'sell' && t.assetType === 'stock')) {
+      const pos = positions.get(key);
+      if (!pos) continue;
+      let remaining = t.qty;
+      while (remaining > 0 && pos.lots.length > 0) {
+        const lot = pos.lots[0];
+        const consumed = Math.min(remaining, lot.qty);
+        lot.qty -= consumed;
+        remaining -= consumed;
+        if (lot.qty <= 0) pos.lots.shift();
+      }
+      if (pos.lots.length === 0) positions.delete(key);
+    }
+  }
+
+  return positions;
+}
+
 export async function deleteAccount(id: string): Promise<void> {
   if (id === 'demo') throw new Error('Cannot delete the demo account');
   const filePath = path.join(ACCOUNTS_DIR, `${id}.json`);

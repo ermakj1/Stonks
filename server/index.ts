@@ -1,4 +1,5 @@
-import 'dotenv/config';
+import { config as loadDotenv } from 'dotenv';
+loadDotenv({ override: true });
 import express from 'express';
 import cors from 'cors';
 import { copyFile, access, mkdir, readFile, writeFile } from 'fs/promises';

@@ -139,6 +139,21 @@ export function DashboardPanel({ holdings, prices, pricesLoading, activeAccountI
       .sort((a, b) => b.marketValue - a.marketValue);
   }, [holdings, priceMap]);
 
+  // Dividend income
+  const divPositions = useMemo(() => {
+    if (!holdings?.stocks) return [];
+    return Object.entries(holdings.stocks)
+      .filter(([t, s]) => s.shares > 0 && !['$CASH', '$OTHER'].includes(t))
+      .flatMap(([ticker, s]) => {
+        const q = priceMap.get(ticker);
+        if (!q?.dividendRate || q.dividendRate <= 0) return [];
+        return [{ ticker, shares: s.shares, rate: q.dividendRate, yield: q.dividendYield ?? 0, annualIncome: q.dividendRate * s.shares, exDivDate: q.exDividendDate }];
+      })
+      .sort((a, b) => b.annualIncome - a.annualIncome);
+  }, [holdings, priceMap]);
+  const totalAnnualDivIncome = useMemo(() => divPositions.reduce((s, p) => s + p.annualIncome, 0), [divPositions]);
+  const INCOME_GOAL = 120_000;
+
   const totalStockValue  = useMemo(() => stockPositions.reduce((s, p) => s + p.marketValue, 0), [stockPositions]);
   const totalCost        = useMemo(() => stockPositions.reduce((s, p) => s + p.costBasis * p.shares, 0), [stockPositions]);
   const totalStockGain   = totalStockValue - totalCost;
@@ -160,7 +175,7 @@ export function DashboardPanel({ holdings, prices, pricesLoading, activeAccountI
       {/* ── Summary cards ── */}
       <div>
         <div style={{ fontSize: 10, fontWeight: 700, color: '#1e293b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>Portfolio Overview</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
           <StatCard
             label="Stock Value"
             value={dollar(totalStockValue)}
@@ -188,6 +203,13 @@ export function DashboardPanel({ holdings, prices, pricesLoading, activeAccountI
             sub={`${unrealized.filter(p => p.unrealizedGain != null).length} position${unrealized.length !== 1 ? 's' : ''} priced`}
             color={totalUnrealized >= 0 ? '#34d399' : '#f87171'}
             loading={unLoading}
+          />
+          <StatCard
+            label="Proj. Div. Income / Yr"
+            value={totalAnnualDivIncome > 0 ? dollar(totalAnnualDivIncome) : '—'}
+            sub={totalAnnualDivIncome > 0 ? `${((totalAnnualDivIncome / INCOME_GOAL) * 100).toFixed(0)}% of $120k goal · $${Math.round(totalAnnualDivIncome / 12).toLocaleString()}/mo` : 'No dividend positions'}
+            color="#34d399"
+            loading={isLoading}
           />
         </div>
       </div>
@@ -306,6 +328,58 @@ export function DashboardPanel({ holdings, prices, pricesLoading, activeAccountI
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Dividend income breakdown ── */}
+      {divPositions.length > 0 && (
+        <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Dividend Income</span>
+            {totalAnnualDivIncome > 0 && (
+              <>
+                <div style={{ flex: 1, height: 4, background: '#1e293b', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${Math.min((totalAnnualDivIncome / INCOME_GOAL) * 100, 100)}%`, background: '#34d399', borderRadius: 2, transition: 'width 0.5s' }} />
+                </div>
+                <span style={{ fontSize: 11, color: '#34d399', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {dollar(totalAnnualDivIncome)}/yr · {((totalAnnualDivIncome / INCOME_GOAL) * 100).toFixed(0)}% of $120k goal
+                </span>
+              </>
+            )}
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #1e293b' }}>
+                {['Ticker', 'Shares', 'Rate/Share', 'Yield', 'Annual Income', 'Monthly', 'Ex-Div Date'].map(h => (
+                  <th key={h} style={{ textAlign: h === 'Ticker' ? 'left' : 'right', padding: '7px 12px', color: '#475569', fontWeight: 600, fontSize: 11 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {divPositions.map(p => (
+                <tr key={p.ticker} style={{ borderBottom: '1px solid #0a0f1a' }}>
+                  <td style={{ padding: '8px 12px', fontWeight: 700, color: '#e2e8f0' }}>{p.ticker}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#94a3b8' }}>{p.shares.toLocaleString()}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#94a3b8' }}>${p.rate.toFixed(2)}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#34d399' }}>{(p.yield * 100).toFixed(2)}%</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#34d399', fontWeight: 600 }}>{dollar(p.annualIncome)}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#64748b' }}>{dollar(p.annualIncome / 12)}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: p.exDivDate ? '#fbbf24' : '#334155' }}>{p.exDivDate ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+            {divPositions.length > 1 && (
+              <tfoot>
+                <tr style={{ borderTop: '1px solid #1e293b' }}>
+                  <td style={{ padding: '7px 12px', color: '#475569', fontSize: 11, fontWeight: 600 }}>Total</td>
+                  <td /><td /><td />
+                  <td style={{ padding: '7px 12px', textAlign: 'right', color: '#34d399', fontWeight: 700 }}>{dollar(totalAnnualDivIncome)}</td>
+                  <td style={{ padding: '7px 12px', textAlign: 'right', color: '#64748b', fontWeight: 600 }}>{dollar(totalAnnualDivIncome / 12)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            )}
+          </table>
         </div>
       )}
 

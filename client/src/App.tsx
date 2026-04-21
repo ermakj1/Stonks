@@ -278,7 +278,7 @@ export default function App() {
                 activeAccountId={activeAccount?.id ?? null}
               />
             )}
-            {rightTab === 'trades' && <TradesPanel activeAccountId={activeAccount?.id ?? null} />}
+            {rightTab === 'trades' && <TradesPanel activeAccountId={activeAccount?.id ?? null} onHoldingsUpdated={handleHoldingsUpdated} />}
             {rightTab === 'debug' && <DebugPanel />}
           </div>
         </div>

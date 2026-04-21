@@ -178,6 +178,9 @@ function OptionTickerCell(p: { value: string; data: OptionRow }) {
         {p.data.isWatchlist && (
           <span style={{ fontSize: 9, fontWeight: 600, marginLeft: 4, color: '#475569', letterSpacing: '0.05em', textTransform: 'uppercase', verticalAlign: 'middle' }}>watch</span>
         )}
+        {p.data.fromTrades && (
+          <span style={{ fontSize: 9, fontWeight: 600, marginLeft: 4, color: '#60a5fa', letterSpacing: '0.05em', textTransform: 'uppercase', verticalAlign: 'middle' }}>trade</span>
+        )}
       </span>
       <a href={FIDELITY_OPTIONS_URL(p.value)} target="_blank" rel="noopener noreferrer" title="Option chain on Fidelity"
         onClick={e => e.stopPropagation()}
@@ -274,6 +277,7 @@ function IvHvCell(p: { value: number | null }) {
 // Delete button cell for option rows
 type OptCtx = { deleteOption: (key: string) => void };
 function DeleteOptionCell(p: { data: OptionRow; context: OptCtx }) {
+  if (p.data.fromTrades) return null;
   return (
     <button
       onClick={e => { e.stopPropagation(); p.context.deleteOption(p.data.key); }}
@@ -296,6 +300,9 @@ interface StockRow {
   dayChangePct: number; marketValue: number; gainDollar: number; gainPct: number;
   actualPct: number; targetPct: number; targetValue: number; notes: string; isSummary?: boolean;
   isSpecial?: boolean; // $CASH or $OTHER rows
+  divYield?: number;            // decimal e.g. 0.007
+  annualDivIncome?: number;     // shares × annual rate
+  targetAnnualIncome?: number;  // targetValue × divYield
 }
 interface OptionRow {
   key: string; ticker: string; type: string; strike: number; expiration: string;
@@ -312,6 +319,8 @@ interface OptionRow {
   ivhvRatio: number | null;
   savedPrice: number | null;
   targetOptionMid: number;
+  fromTrades?: boolean;
+  lastOpenTradeId?: string;
 }
 
 // ── Add Stock modal ───────────────────────────────────────────────────
@@ -565,8 +574,23 @@ interface Props {
   lastRefreshed: Date | null;
 }
 
+interface TradePosition {
+  id: string; ticker: string; assetType: 'stock' | 'option';
+  optionType?: string; strike?: number; expiration?: string;
+  notes: string; lastOpenTradeId: string;
+  netQty: number; avgCostBasis: number;
+  currentPrice: number | null; unrealizedGain: number | null; unrealizedGainPct: number | null;
+}
+
 export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, optionChainTicker, onOptionChainChange, aiHighlights, chainInitialExpiry, onRefreshPrices, pricesLoading, lastRefreshed }: Props) {
   const [showAddModal, setShowAddModal] = useState(false);
+  const [tradePositions, setTradePositions] = useState<TradePosition[]>([]);
+  useEffect(() => {
+    fetch('/api/positions/unrealized')
+      .then(r => r.ok ? r.json() : [])
+      .then(setTradePositions)
+      .catch(() => setTradePositions([]));
+  }, [holdings]);
   const [showAddOptionModal, setShowAddOptionModal] = useState(false);
   const [showAddStockMenu, setShowAddStockMenu] = useState(false);
   const [stocksCollapsed, setStocksCollapsed] = useState(false);
@@ -657,22 +681,25 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, op
       const cost = s.cost_basis * s.shares;
       const gainDollar = price > 0 && s.shares > 0 ? marketValue - cost : 0;
       const gainPct = price > 0 && cost > 0 ? (gainDollar / cost) * 100 : 0;
-      return { ticker, shares: s.shares, costBasis: s.cost_basis, price, dayChangePct: q?.changePercent ?? 0, marketValue, gainDollar, gainPct, targetPct: s.target_allocation_pct, notes: s.notes };
+      const divYield = q?.dividendYield;
+      const annualDivIncome = q?.dividendRate != null && q.dividendRate > 0 ? q.dividendRate * s.shares : undefined;
+      return { ticker, shares: s.shares, costBasis: s.cost_basis, price, dayChangePct: q?.changePercent ?? 0, marketValue, gainDollar, gainPct, targetPct: s.target_allocation_pct, notes: s.notes, divYield, annualDivIncome };
     });
   }, [holdings, priceMap]);
 
   const totalValue = baseRows.reduce((s, r) => s + r.marketValue, 0);
-  const stockRows = useMemo<StockRow[]>(() => baseRows.map(r => ({
-    ...r,
-    actualPct: totalValue > 0 ? (r.marketValue / totalValue) * 100 : 0,
-    targetValue: totalValue > 0 ? (r.targetPct / 100) * totalValue : 0,
-  })), [baseRows, totalValue]);
+  const stockRows = useMemo<StockRow[]>(() => baseRows.map(r => {
+    const targetValue = totalValue > 0 ? (r.targetPct / 100) * totalValue : 0;
+    const targetAnnualIncome = (r.divYield ?? 0) > 0 ? targetValue * r.divYield! : undefined;
+    return { ...r, actualPct: totalValue > 0 ? (r.marketValue / totalValue) * 100 : 0, targetValue, targetAnnualIncome };
+  }), [baseRows, totalValue]);
 
   const totalCost = stockRows.reduce((s, r) => s + (r.isSpecial ? r.costBasis : r.costBasis * r.shares), 0);
   const totalGain = totalValue - totalCost;
   const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
   const totalDayChange = stockRows.reduce((s, r) => s + (r.price > 0 && r.shares > 0 ? (r.dayChangePct / 100) * r.marketValue : 0), 0);
   const weightedDayChangePct = totalValue > 0 ? (totalDayChange / totalValue) * 100 : 0;
+  const totalAnnualDivIncome = stockRows.reduce((s, r) => s + (r.annualDivIncome ?? 0), 0);
 
   const summaryRow: StockRow = {
     ticker: '', shares: 0, costBasis: 0, price: 0,
@@ -681,12 +708,14 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, op
     targetPct: stockRows.reduce((s, r) => s + r.targetPct, 0),
     targetValue: stockRows.reduce((s, r) => s + r.targetValue, 0),
     notes: '', isSummary: true,
+    annualDivIncome: totalAnnualDivIncome > 0 ? totalAnnualDivIncome : undefined,
+    targetAnnualIncome: (() => { const t = stockRows.reduce((s, r) => s + (r.targetAnnualIncome ?? 0), 0); return t > 0 ? t : undefined; })(),
   };
 
   // ── option rows (owned + watchlist unified) ──────────────────────
   const optionRows = useMemo<OptionRow[]>(() => {
     if (!holdings) return [];
-    return Object.entries(holdings.options).map(([key, o]) => {
+    const holdingsRows = Object.entries(holdings.options).map(([key, o]) => {
       const isWatchlist = o.contracts === 0;
       const isShort = o.contracts < 0;
       const currentMid = optionPriceMap.get(key)?.mid ?? null;
@@ -719,7 +748,32 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, op
         notes: o.notes,
       };
     });
-  }, [holdings, priceMap, optionPriceMap, prices]);
+
+    // Merge open option positions from trade history that aren't already in holdings.options
+    const holdingsKeys = new Set(holdingsRows.map(r => r.key));
+    const tradeRows: OptionRow[] = tradePositions
+      .filter(p => p.assetType === 'option' && p.optionType && p.strike != null && p.expiration)
+      .map(p => {
+        const key = buildOccKey(p.ticker, p.optionType!, p.strike!, p.expiration!);
+        if (holdingsKeys.has(key)) return null;
+        const absContracts = Math.abs(p.netQty);
+        const optionCost = p.avgCostBasis * absContracts * 100;
+        const gainPct = optionCost > 0 && p.unrealizedGain != null
+          ? (p.unrealizedGain / optionCost) * 100 : null;
+        return {
+          key, ticker: p.ticker, type: p.optionType!, strike: p.strike!, expiration: p.expiration!,
+          contracts: p.netQty, daysToExpiration: dteFromExpiry(p.expiration!),
+          isWatchlist: false, premiumPaid: p.avgCostBasis,
+          currentMid: p.currentPrice, gainDollar: p.unrealizedGain, gainPct,
+          underlyingPrice: priceMap.get(p.ticker)?.price ?? 0,
+          iv30: null, hv30: null, ivhvRatio: null, savedPrice: null, targetOptionMid: 0,
+          notes: p.notes ?? '', fromTrades: true, lastOpenTradeId: p.lastOpenTradeId,
+        } satisfies OptionRow;
+      })
+      .filter((r): r is OptionRow => r !== null);
+
+    return [...holdingsRows, ...tradeRows];
+  }, [holdings, priceMap, optionPriceMap, prices, tradePositions]);
 
   // ── save helpers ─────────────────────────────────────────────────
   const saveHoldings = useCallback(async (updated: Holdings) => {
@@ -730,10 +784,13 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, op
   const onCellValueChanged = useCallback(async (e: CellValueChangedEvent<StockRow>) => {
     if (!holdings || e.data.isSummary) return;
     const { ticker, shares, costBasis, notes } = e.data;
-    // If targetValue was edited, derive targetPct from it; otherwise use existing targetPct
-    const targetPct = e.column.getColId() === 'targetValue'
-      ? (totalValue > 0 ? (Number(e.newValue) / totalValue) * 100 : 0)
-      : e.data.targetPct;
+    const colId = e.column.getColId();
+    const targetPct =
+      colId === 'targetValue'
+        ? (totalValue > 0 ? (Number(e.newValue) / totalValue) * 100 : 0)
+        : colId === 'targetAnnualIncome' && (e.data.divYield ?? 0) > 0
+          ? (Number(e.newValue) / (totalValue * e.data.divYield!)) * 100
+          : e.data.targetPct;
     const updated: Holdings = { ...holdings, stocks: { ...holdings.stocks, [ticker]: { ...holdings.stocks[ticker], shares: Number(shares), cost_basis: Number(costBasis), target_allocation_pct: targetPct, notes: String(notes ?? '') } } };
     try { await saveHoldings(updated); } catch (err) { console.error('Failed to save:', err); }
   }, [holdings, saveHoldings, totalValue]);
@@ -745,7 +802,21 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, op
 
   const onOptionCellValueChanged = useCallback(async (e: CellValueChangedEvent<OptionRow>) => {
     if (!holdings) return;
-    const { key, contracts, premiumPaid, targetOptionMid, notes } = e.data;
+    const { key, contracts, premiumPaid, targetOptionMid, notes, fromTrades, lastOpenTradeId } = e.data;
+
+    // Trade-derived row: patch notes on the opening trade record
+    if (fromTrades) {
+      if (!lastOpenTradeId) return;
+      try {
+        await fetch(`/api/trades/${lastOpenTradeId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: String(notes ?? '') }),
+        });
+      } catch (err) { console.error('Failed to save position notes:', err); }
+      return;
+    }
+
     const existing = holdings.options[key];
     if (!existing) return;
     const updated: Holdings = {
@@ -816,15 +887,29 @@ export function HoldingsPanel({ holdings, prices, loading, onHoldingsUpdated, op
         return `$${fmt2(p.value)}`;
       },
       valueParser: p => Number(p.newValue), onCellValueChanged },
-    { field: 'price',        headerName: 'Last Price', width: 105, cellRenderer: (p: { value: number; data: StockRow }) => p.data?.isSpecial ? <span style={{ color: '#475569' }}>—</span> : <PriceCell value={p.value} /> },
+    { field: 'price',        headerName: 'Last Price', width: 105, cellRenderer: (p: { value: number; data: StockRow }) => (p.data?.isSpecial || p.data?.isSummary) ? <span style={{ color: '#475569' }}>{p.data.isSummary ? '' : '—'}</span> : <PriceCell value={p.value} /> },
     { field: 'dayChangePct', headerName: 'Day %',      width: 90,  cellRenderer: (p: { value: number; data: StockRow }) => p.data?.isSpecial ? <span style={{ color: '#475569' }}>—</span> : <DayCell value={p.value} /> },
     { field: 'marketValue',  headerName: 'Mkt Value',  width: 115, valueFormatter: p => p.value > 0 ? dollar(p.value) : '—' },
     { field: 'gainDollar',   headerName: 'Gain $',     width: 120, cellRenderer: (p: { value: number; data: StockRow }) => p.data?.ticker === '$CASH' ? <span style={{ color: '#475569' }}>—</span> : <GainDollarCell value={p.value} /> },
     { field: 'gainPct',      headerName: 'Gain %',     width: 90,  cellRenderer: (p: { value: number; data: StockRow }) => p.data?.ticker === '$CASH' ? <span style={{ color: '#475569' }}>—</span> : <GainPctCell value={p.value} /> },
+    { field: 'divYield',     headerName: 'Div Yield',  width: 90,
+      valueFormatter: (p: { value: number | undefined; data: StockRow }) => p.data?.isSummary ? '' : (p.value != null && p.value > 0 ? `${(p.value * 100).toFixed(2)}%` : '—'),
+      cellStyle: { color: '#34d399', textAlign: 'right' } },
+    { field: 'annualDivIncome', headerName: 'Ann. Income', width: 110,
+      valueFormatter: (p: { value: number | undefined; data: StockRow }) => p.value != null && p.value > 0 ? `$${Math.round(p.value).toLocaleString()}` : (p.data?.isSummary ? '' : '—'),
+      cellStyle: { color: '#34d399', textAlign: 'right' } },
     { field: 'actualPct',    headerName: 'Actual %',   width: 85,  cellRenderer: AllocPctCell },
     { field: 'targetPct',    headerName: 'Target %',   width: 85,  editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec, cellRenderer: AllocPctCell, valueParser: p => Number(p.newValue), onCellValueChanged },
     { field: 'targetValue',  headerName: 'Target $',   width: 105, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : ec,
       valueFormatter: p => p.value > 0 ? dollar(p.value) : '—',
+      valueParser: p => Number(p.newValue), onCellValueChanged },
+    { field: 'targetAnnualIncome', headerName: 'Target Income', width: 120,
+      editable: p => !p.data?.isSummary && (p.data?.divYield ?? 0) > 0,
+      cellStyle: (p: { data?: StockRow }) => p.data?.isSummary ? {} : (p.data?.divYield ?? 0) > 0 ? { ...ec, color: '#34d399', textAlign: 'right' } : { color: '#334155', textAlign: 'right' },
+      valueFormatter: (p: { value: number | undefined; data?: StockRow }) =>
+        p.data?.isSummary
+          ? (p.value != null && p.value > 0 ? `$${Math.round(p.value).toLocaleString()}` : '')
+          : (p.value != null && p.value > 0 ? `$${Math.round(p.value).toLocaleString()}` : ((p.data?.divYield ?? 0) > 0 ? '—' : '')),
       valueParser: p => Number(p.newValue), onCellValueChanged },
     { field: 'notes',        headerName: 'Notes',      flex: 1, minWidth: 80, editable: p => !p.data?.isSummary, cellStyle: p => p.data?.isSummary ? {} : { ...ec, color: '#64748b', fontSize: '12px' }, onCellValueChanged },
   ], [onCellValueChanged]);

@@ -63,6 +63,9 @@ export interface StockQuote {
   changePercent: number;
   volume: number;
   marketCap?: number;
+  dividendRate?: number;   // annual $ per share
+  dividendYield?: number;  // decimal, e.g. 0.007 = 0.7%
+  exDividendDate?: string; // YYYY-MM-DD
 }
 
 export interface OptionsData {

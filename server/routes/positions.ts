@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getActiveAccountId, readAccount, type Trade } from '../services/accounts.js';
+import { getActiveAccountId, readAccount, buildOpenPositions, type Trade } from '../services/accounts.js';
 import { getOptionMid } from '../services/cboe.js';
 
 export const positionsRouter = Router();
@@ -11,50 +11,13 @@ interface OpenPosition {
   optionType?: string;
   strike?: number;
   expiration?: string;
+  notes: string;
+  lastOpenTradeId: string;
   netQty: number;
   avgCostBasis: number;
   currentPrice: number | null;
   unrealizedGain: number | null;
   unrealizedGainPct: number | null;
-}
-
-function buildOpenPositions(trades: Trade[]): Map<string, { ticker: string; assetType: 'stock' | 'option'; optionType?: string; strike?: number; expiration?: string; lots: { price: number; qty: number }[] }> {
-  const sorted = [...trades].sort((a, b) => a.date.localeCompare(b.date));
-  const positions = new Map<string, { ticker: string; assetType: 'stock' | 'option'; optionType?: string; strike?: number; expiration?: string; lots: { price: number; qty: number }[] }>();
-
-  function lotKey(t: Trade): string {
-    return t.assetType === 'option'
-      ? `${t.ticker}-${t.optionType}-${t.strike}-${t.expiration}`
-      : `${t.ticker}-stock`;
-  }
-
-  for (const t of sorted) {
-    const key = lotKey(t);
-
-    if (t.action === 'open' || (t.action === 'buy' && t.assetType === 'stock')) {
-      const existing = positions.get(key) ?? { ticker: t.ticker, assetType: t.assetType, optionType: t.optionType, strike: t.strike, expiration: t.expiration, lots: [] };
-      existing.lots.push({ price: t.price, qty: t.qty });
-      positions.set(key, existing);
-
-    } else if (
-      t.action === 'close' || t.action === 'expired' || t.action === 'assigned' ||
-      (t.action === 'sell' && t.assetType === 'stock')
-    ) {
-      const pos = positions.get(key);
-      if (!pos) continue;
-      let remaining = t.qty;
-      while (remaining > 0 && pos.lots.length > 0) {
-        const lot = pos.lots[0];
-        const consumed = Math.min(remaining, lot.qty);
-        lot.qty -= consumed;
-        remaining -= consumed;
-        if (lot.qty <= 0) pos.lots.shift();
-      }
-      if (pos.lots.length === 0) positions.delete(key);
-    }
-  }
-
-  return positions;
 }
 
 // GET /api/positions/unrealized
@@ -115,7 +78,7 @@ positionsRouter.get('/unrealized', async (_req, res) => {
           unrealizedGainPct = totalCostBasis > 0 ? (gain / totalCostBasis) * 100 : null;
         }
 
-        return { id, ticker: pos.ticker, assetType: pos.assetType, optionType: pos.optionType, strike: pos.strike, expiration: pos.expiration, netQty, avgCostBasis, currentPrice, unrealizedGain, unrealizedGainPct };
+        return { id, ticker: pos.ticker, assetType: pos.assetType, optionType: pos.optionType, strike: pos.strike, expiration: pos.expiration, notes: pos.notes, lastOpenTradeId: pos.lastOpenTradeId, netQty, avgCostBasis, currentPrice, unrealizedGain, unrealizedGainPct };
       })
     );
 

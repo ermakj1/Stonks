@@ -868,9 +868,10 @@ function AddTradeModal({ onClose, onAdd }: AddTradeModalProps) {
 
 interface Props {
   activeAccountId: string | null;
+  onHoldingsUpdated?: () => void;
 }
 
-export function TradesPanel({ activeAccountId }: Props) {
+export function TradesPanel({ activeAccountId, onHoldingsUpdated }: Props) {
   const [trades, setTrades]               = useState<Trade[]>([]);
   const [loading, setLoading]             = useState(true);
   const [showAdd, setShowAdd]             = useState(false);
@@ -913,7 +914,10 @@ export function TradesPanel({ activeAccountId }: Props) {
   const handleAdd = useCallback(async (trade: Omit<Trade, 'id'>) => {
     await fetch('/api/trades', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trade) });
     await fetchTrades();
-  }, [fetchTrades]);
+    if (['close', 'expired', 'assigned', 'sell'].includes(trade.action)) {
+      onHoldingsUpdated?.();
+    }
+  }, [fetchTrades, onHoldingsUpdated]);
 
   const handleImport = useCallback(async (imported: Omit<Trade, 'id'>[]) => {
     await fetch('/api/trades/bulk', {
@@ -967,6 +971,19 @@ export function TradesPanel({ activeAccountId }: Props) {
   const totalRealized = useMemo(() => filteredRows.reduce((s, r) => s + (r.pnl ?? 0), 0), [filteredRows]);
   const totalOutflows = useMemo(() => filteredRows.filter(r => !ACTION_META[r.action].isInflow).reduce((s, r) => s + r.total, 0), [filteredRows]);
   const totalInflows  = useMemo(() => filteredRows.filter(r =>  ACTION_META[r.action].isInflow).reduce((s, r) => s + r.total, 0), [filteredRows]);
+
+  const summaryByType = useMemo(() => {
+    const calc = (rows: typeof filteredRows) => ({
+      count:    rows.length,
+      outflows: rows.filter(r => !ACTION_META[r.action].isInflow).reduce((s, r) => s + r.total, 0),
+      inflows:  rows.filter(r =>  ACTION_META[r.action].isInflow).reduce((s, r) => s + r.total, 0),
+      realized: rows.reduce((s, r) => s + (r.pnl ?? 0), 0),
+    });
+    return {
+      stocks:  calc(filteredRows.filter(r => r.assetType === 'stock')),
+      options: calc(filteredRows.filter(r => r.assetType === 'option')),
+    };
+  }, [filteredRows]);
 
   type TradeRow = (typeof rows)[number];
 
@@ -1185,24 +1202,70 @@ export function TradesPanel({ activeAccountId }: Props) {
 
       {/* Summary footer */}
       {filteredRows.length > 0 && (
-        <div ref={summaryRef} className="px-5 py-2 border-t border-slate-800 flex items-center gap-6 flex-shrink-0 bg-slate-900/60">
-          <span className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">{filteredRows.length} trade{filteredRows.length !== 1 ? 's' : ''}</span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-slate-500">Outflows</span>
-            <span className="text-[11px] font-semibold text-red-400">-{dollar(totalOutflows)}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-slate-500">Inflows</span>
-            <span className="text-[11px] font-semibold text-emerald-400">+{dollar(totalInflows)}</span>
-          </div>
-          {totalRealized !== 0 && (
+        <div ref={summaryRef} className="px-5 py-3 border-t border-slate-700 flex-shrink-0 bg-slate-900/80">
+          {/* Overall totals row */}
+          <div className="flex items-center gap-6 mb-2.5">
+            <span className="text-[11px] text-slate-400 uppercase tracking-widest font-bold">
+              {filteredRows.length} trade{filteredRows.length !== 1 ? 's' : ''}
+            </span>
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-slate-500">Realized P&amp;L</span>
-              <span className={`text-[11px] font-semibold ${totalRealized >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              <span className="text-xs text-slate-500">Spent</span>
+              <span className="text-xs font-semibold text-red-400">-{dollar(totalOutflows)}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-500">Received</span>
+              <span className="text-xs font-semibold text-emerald-400">+{dollar(totalInflows)}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-500">Net P&amp;L</span>
+              <span className={`text-xs font-bold ${totalRealized >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                 {dollar(totalRealized, { sign: true })}
               </span>
             </div>
-          )}
+          </div>
+          {/* Per-type breakdown */}
+          <div className="flex gap-6">
+            {summaryByType.stocks.count > 0 && (
+              <div className="flex items-center gap-3 bg-slate-800/60 rounded px-3 py-1.5">
+                <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Stocks</span>
+                <span className="text-[11px] text-slate-500">{summaryByType.stocks.count} trade{summaryByType.stocks.count !== 1 ? 's' : ''}</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-slate-500">Spent</span>
+                  <span className="text-[11px] font-semibold text-red-400">-{dollar(summaryByType.stocks.outflows)}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-slate-500">Received</span>
+                  <span className="text-[11px] font-semibold text-emerald-400">+{dollar(summaryByType.stocks.inflows)}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-slate-500">P&amp;L</span>
+                  <span className={`text-[11px] font-bold ${summaryByType.stocks.realized >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {dollar(summaryByType.stocks.realized, { sign: true })}
+                  </span>
+                </div>
+              </div>
+            )}
+            {summaryByType.options.count > 0 && (
+              <div className="flex items-center gap-3 bg-slate-800/60 rounded px-3 py-1.5">
+                <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Options</span>
+                <span className="text-[11px] text-slate-500">{summaryByType.options.count} trade{summaryByType.options.count !== 1 ? 's' : ''}</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-slate-500">Spent</span>
+                  <span className="text-[11px] font-semibold text-red-400">-{dollar(summaryByType.options.outflows)}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-slate-500">Received</span>
+                  <span className="text-[11px] font-semibold text-emerald-400">+{dollar(summaryByType.options.inflows)}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-slate-500">P&amp;L</span>
+                  <span className={`text-[11px] font-bold ${summaryByType.options.realized >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {dollar(summaryByType.options.realized, { sign: true })}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

@@ -11,15 +11,18 @@ export interface ChatMessage {
 
 export type ToolExecutor = (name: string, input: Record<string, unknown>) => Promise<string>;
 
-const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
-const geminiClient    = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? '');
+const getAnthropicClient = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const getGeminiClient    = () => new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? '');
 
 // ── Tool definitions ──────────────────────────────────────────────────
 
 const TOOL_DESCRIPTION = `Fetch a filtered options chain for a stock ticker. Use this when the user asks about options trades, wants to find contracts, or when you need current option prices to make a recommendation.
 
 Returns contracts with: strike, expiry, DTE, bid/ask/mid price, IV%, delta, volume, and open interest.
-Always filter to a sensible range — default OTM, 20-90 DTE — to keep results focused.`;
+Tips for getting the right contracts:
+- When hunting a specific delta zone (e.g. 0.15Δ), set type="calls" or type="puts" and raise max_results to 60-80 so the full strike range is returned.
+- Use otm_only=true (default) for covered calls / CSPs; set otm_only=false if you need ATM or ITM strikes.
+- Widen dte_max if the target expiry falls outside the default 90-day window.`;
 
 const ANTHROPIC_TOOLS: Anthropic.Tool[] = [{
   name: 'get_option_chain',
@@ -102,7 +105,7 @@ async function streamAnthropic(
   // Tool call rounds — non-streaming so we can inspect stop_reason
   const MAX_ROUNDS = 5;
   for (let round = 0; round < MAX_ROUNDS && toolExecutor; round++) {
-    const response = await anthropicClient.messages.create({
+    const response = await getAnthropicClient().messages.create({
       model,
       max_tokens: 4096,
       system:   systemPrompt,
@@ -131,7 +134,7 @@ async function streamAnthropic(
   }
 
   // Final streaming response
-  const stream = await anthropicClient.messages.stream({
+  const stream = await getAnthropicClient().messages.stream({
     model,
     max_tokens: 4096,
     system:     systemPrompt,
@@ -158,7 +161,7 @@ async function streamGemini(
   toolExecutor?: ToolExecutor,
   modelId = 'gemini-2.0-flash',
 ): Promise<void> {
-  const model = geminiClient.getGenerativeModel({
+  const model = getGeminiClient().getGenerativeModel({
     model:             modelId,
     systemInstruction: systemPrompt,
     ...(toolExecutor ? { tools: GEMINI_TOOLS } : {}),

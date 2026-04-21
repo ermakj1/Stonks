@@ -13,9 +13,8 @@ interface Section {
 }
 
 const SECTIONS: Section[] = [
-  { id: 'systemPrompt', label: 'System Prompt',  description: 'Full text sent to the AI on every message (persona + strategy + holdings + prices)' },
-  { id: 'holdings',     label: 'Holdings JSON',  description: 'Active account holdings — same data the AI receives on every chat message' },
-  { id: 'prices',       label: 'Prices (Raw)',   description: 'Live prices fetched for all positions — this feeds the system prompt' },
+  { id: 'systemPrompt', label: 'System Prompt', description: 'Full text sent to the AI on every message (persona + strategy + holdings + prices)' },
+  { id: 'prices',       label: 'Prices (Raw)',  description: 'Live prices fetched for all positions — this feeds the system prompt' },
 ];
 
 function CopyButton({ text }: { text: string }) {

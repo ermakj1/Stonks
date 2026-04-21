@@ -147,7 +147,7 @@ export interface ChainFilter {
   dteMin?:         number;   // default 20
   dteMax?:         number;   // default 90
   otmOnly?:        boolean;  // default true
-  maxResults?:     number;   // default 25, capped at 50
+  maxResults?:     number;   // default 40, capped at 80
   underlyingPrice?: number;
 }
 
@@ -222,14 +222,40 @@ export async function getFilteredChain(
     });
   }
 
-  // Sort: nearest expiry first, then closest strike to underlying
-  results.sort((a, b) => {
-    if (a.dte !== b.dte) return a.dte - b.dte;
-    if (underlyingPrice != null) {
-      return Math.abs(a.strike - underlyingPrice) - Math.abs(b.strike - underlyingPrice);
+  // Group by expiry, sort each group by closeness to underlying, then
+  // take a balanced sample across all expiries so no single date hogs
+  // all the maxResults slots.
+  const byExpiry = new Map<string, FilteredContract[]>();
+  for (const c of results) {
+    const bucket = byExpiry.get(c.expiry) ?? [];
+    bucket.push(c);
+    byExpiry.set(c.expiry, bucket);
+  }
+
+  const cap = Math.min(maxResults, 80);
+  const perExpiry = Math.max(5, Math.ceil(cap / byExpiry.size));
+
+  const balanced: FilteredContract[] = [];
+  for (const [, bucket] of [...byExpiry.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    // For OTM-only chains sort by strike direction so far-OTM (low delta) end is included.
+    // Calls OTM → ascending strike; puts OTM → descending strike; mixed → by distance.
+    if (otmOnly && type !== 'both') {
+      bucket.sort((a, b) => type === 'puts' ? b.strike - a.strike : a.strike - b.strike);
+    } else {
+      bucket.sort((a, b) =>
+        underlyingPrice != null
+          ? Math.abs(a.strike - underlyingPrice) - Math.abs(b.strike - underlyingPrice)
+          : a.strike - b.strike
+      );
     }
+    balanced.push(...bucket.slice(0, perExpiry));
+  }
+
+  // Final sort: nearest expiry first, then by strike direction
+  balanced.sort((a, b) => {
+    if (a.dte !== b.dte) return a.dte - b.dte;
     return a.strike - b.strike;
   });
 
-  return results.slice(0, Math.min(maxResults, 50));
+  return balanced.slice(0, cap);
 }
