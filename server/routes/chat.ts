@@ -291,7 +291,7 @@ function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
     const dteMin     = Number(input.dte_min     ?? 20);
     const dteMax     = Number(input.dte_max     ?? 90);
     const otmOnly    = input.otm_only !== false;
-    const maxResults = Math.min(Number(input.max_results ?? 40), 80);
+    const maxResults = Math.min(Number(input.max_results ?? 40), 120);
 
     const underlyingPrice = priceMap.get(ticker)?.price;
 
