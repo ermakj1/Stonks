@@ -168,10 +168,13 @@ async function streamGemini(
     ...(toolExecutor ? { tools: GEMINI_TOOLS } : {}),
   });
 
-  const history = messages.slice(0, -1).map(m => ({
+  // Gemini requires history to start with a 'user' turn — drop any leading assistant messages
+  const allHistory = messages.slice(0, -1).map(m => ({
     role:  m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }));
+  const firstUser = allHistory.findIndex(m => m.role === 'user');
+  const history = firstUser >= 0 ? allHistory.slice(firstUser) : [];
 
   const chat        = model.startChat({ history });
   const lastMessage = messages[messages.length - 1];
