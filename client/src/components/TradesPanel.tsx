@@ -374,17 +374,24 @@ function parseSchwabWebText(text: string): ParsedImportRow[] {
   const rows: ParsedImportRow[] = [];
   let i = 0;
 
+  const ACTION_RE = /^(buy|sell)\s+to\s+(open|close)|^buy$|^sell$/i;
+
   while (i < lines.length) {
     const date = parseSchwabBlockDate(lines[i]);
     if (!date) { i++; continue; }
 
-    // Need at least 5 more lines for a complete block
-    if (i + 5 > lines.length) break;
+    // Need at least 4 more lines for a complete block
+    if (i + 4 > lines.length) break;
 
-    // line i+1: account — skip
-    const actionRaw = (lines[i + 2] ?? '').toLowerCase();
-    const details   =  lines[i + 3] ?? '';
-    const filledRaw =  lines[i + 4] ?? '';
+    // Line i+1 is either the account ("Main ***8880") or the action directly.
+    // Detect by checking if it looks like an action verb.
+    const hasAccount = !ACTION_RE.test(lines[i + 1] ?? '');
+    const offset     = hasAccount ? 1 : 0;
+    const blockSize  = hasAccount ? 6 : 5;
+
+    const actionRaw = (lines[i + 1 + offset] ?? '').toLowerCase();
+    const details   =  lines[i + 2 + offset] ?? '';
+    const filledRaw =  lines[i + 3 + offset] ?? '';
 
     const filledMatch = filledRaw.match(/filled at \$([0-9,.]+)/i);
     if (!filledMatch) { i++; continue; }
@@ -433,7 +440,7 @@ function parseSchwabWebText(text: string): ParsedImportRow[] {
       }
     }
 
-    i += 6;
+    i += blockSize;
   }
   return rows;
 }
