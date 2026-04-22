@@ -9,16 +9,16 @@ export const PROVIDER_MODELS: Record<string, ModelOption[]> = {
     { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5'   },
   ],
   gemini: [
-    { id: 'gemini-2.0-flash',        label: 'Gemini 2.0 Flash'      },
-    { id: 'gemini-2.0-flash-lite',   label: 'Gemini 2.0 Flash Lite' },
-    { id: 'gemini-1.5-pro-latest',   label: 'Gemini 1.5 Pro'        },
-    { id: 'gemini-1.5-flash-latest', label: 'Gemini 1.5 Flash'      },
+    { id: 'gemini-2.5-pro',        label: 'Gemini 2.5 Pro'        },
+    { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash'      },
+    { id: 'gemini-2.0-flash',      label: 'Gemini 2.0 Flash'      },
+    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
   ],
 };
 
 export const DEFAULT_MODEL: Record<string, string> = {
   anthropic: 'claude-sonnet-4-6',
-  gemini:    'gemini-2.0-flash',
+  gemini:    'gemini-2.5-flash',
 };
 
 export interface AccountMeta { id: string; name: string; }
