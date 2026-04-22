@@ -81,7 +81,7 @@ function StatCard({ label, value, sub, color, loading }: { label: string; value:
       <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>{label}</div>
       {loading
         ? <div style={{ height: 26, background: '#1e293b', borderRadius: 4, width: '55%' }} />
-        : <div style={{ fontSize: 22, fontWeight: 700, color: color ?? '#e2e8f0', lineHeight: 1.2 }}>{value}</div>
+        : <div style={{ fontSize: 'clamp(15px, 2vw, 22px)', fontWeight: 700, color: color ?? '#e2e8f0', lineHeight: 1.2, wordBreak: 'break-all' }}>{value}</div>
       }
       {sub && !loading && <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>{sub}</div>}
     </div>
@@ -175,7 +175,7 @@ export function DashboardPanel({ holdings, prices, pricesLoading, activeAccountI
       {/* ── Summary cards ── */}
       <div>
         <div style={{ fontSize: 10, fontWeight: 700, color: '#1e293b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>Portfolio Overview</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
           <StatCard
             label="Stock Value"
             value={dollar(totalStockValue)}
