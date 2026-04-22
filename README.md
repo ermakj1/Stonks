@@ -4,11 +4,12 @@ AI-powered stock and options trading assistant — a local web app combining liv
 
 ## Features
 
-- **AI Chat** — Chat with Claude or Gemini about your portfolio. The AI sees your holdings, live prices, trading strategy, and recent trade history. Suggests option contracts with one-click "Add to Watchlist" buttons.
-- **Holdings Panel** — Track stocks and options with live prices from Yahoo Finance and CBOE. Edit cost basis, target allocation, and notes inline. Supports short options.
-- **Option Watchlist** — Watch option chains without owning the contracts. Filter by expiry frequency (weekly/monthly), view live bid/ask/IV.
-- **Option Chain** — Inline option chain modal with expiry filtering, live CBOE data, and direct add-to-watchlist.
-- **Trade History** — Log trades manually or import broker exports (Schwab tab-separated format). Open positions and closed positions shown in separate sections. FIFO P&L calculation, cumulative P&L chart, win rate stats, CSV export.
+- **AI Chat** — Chat with Claude or Gemini about your portfolio. The AI sees your holdings, live prices, open positions, trading strategy, and trade history. Suggests option contracts with one-click "Add to Watchlist" buttons. Conversation history persists per account across sessions.
+- **Dashboard** — Portfolio overview with stock value, today's change, realized P&L, unrealized options P&L, and projected annual dividend income. Includes allocation chart, dividend income breakdown, and recent trade log.
+- **Holdings Panel** — Track stocks with live prices from Yahoo Finance. Inline editing for cost basis, target allocation %, target $, target income, and notes. Dividend yield and annual income columns. Options positions derived automatically from trade history.
+- **Option Watchlist** — Watch option chains without owning the contracts. Filter by expiry frequency (monthly/weekly/daily), view live bid/ask/IV.
+- **Option Chain** — Inline option chain modal with expiry filtering, live CBOE data, and direct add-to-watchlist. AI can fetch the chain mid-conversation to find specific strikes.
+- **Trade History** — Log trades manually or import from Fidelity/Schwab (web copy-paste block format or tab-separated CSV export). Open and closed positions in separate sections. FIFO P&L, cumulative P&L chart, win rate stats, CSV export.
 - **Strategy Editor** — Edit your trading strategy in markdown. The AI uses this as context for every chat message.
 - **Multi-Account** — Switch between multiple portfolios. Includes a read-only Demo account.
 - **File Updates** — The AI can suggest changes to your holdings or strategy, which you can review and apply via a diff modal.
