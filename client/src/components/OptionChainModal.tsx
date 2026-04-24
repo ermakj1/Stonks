@@ -292,9 +292,10 @@ function buildHighlightKeys(suggestions: OptionSuggestion[]): Set<string> {
   return keys;
 }
 
-// Convert suggestion expiration (YYYY-MM-DD) to unix timestamp matching expiry dates
+// Convert suggestion expiration (YYYY-MM-DD) to unix timestamp matching expiry dates.
+// Must match the server's toUnix convention: noon UTC.
 function suggestionToUnix(expiration: string): number {
-  return new Date(expiration + 'T16:00:00Z').getTime() / 1000;
+  return new Date(expiration + 'T12:00:00Z').getTime() / 1000;
 }
 
 export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, ownedKeys, watchedKeys, highlights, initialExpiry }: Props) {
@@ -329,7 +330,7 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
     const targetTimestamps = new Set(highlights.map(h => suggestionToUnix(h.expiration)));
     for (const ts of expiryDates) {
       // Match within a 24-hour window to handle timezone differences
-      const matches = [...targetTimestamps].some(target => Math.abs(ts - target) < 86400);
+      const matches = [...targetTimestamps].some(target => Math.abs(ts - target) < 3600);
       if (matches && !filters.selectedExpiries.includes(ts)) {
         toggleExpiry(ts);
       }
@@ -345,7 +346,7 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
 
     const target = suggestionToUnix(initialExpiry);
     for (const ts of expiryDates) {
-      if (Math.abs(ts - target) < 86400 && !filters.selectedExpiries.includes(ts)) {
+      if (Math.abs(ts - target) < 3600 && !filters.selectedExpiries.includes(ts)) {
         toggleExpiry(ts);
       }
     }
