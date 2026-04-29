@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message, AIProvider, FileUpdate, Holdings, OptionSuggestion } from '../types';
+import type { Message, AIProvider, FileUpdate, Holdings, OptionSuggestion, ToolCallRecord } from '../types';
 import { ChatMessage } from './ChatMessage';
 import { FileDiffModal } from './FileDiffModal';
 
@@ -147,6 +147,7 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, active
       const decoder = new TextDecoder();
       let fullText = '';
       let buffer = '';
+      const toolCallsAccum: ToolCallRecord[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -171,11 +172,33 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, active
               fullText += parsed.text;
             } else if (parsed.tool_call) {
               const inp = parsed.tool_call.input;
-              const ticker  = inp.ticker  ? String(inp.ticker).toUpperCase() : '';
-              const type    = inp.type    ? String(inp.type)    : 'options';
-              const dteMin  = inp.dte_min != null ? String(inp.dte_min)  : '20';
-              const dteMax  = inp.dte_max != null ? String(inp.dte_max)  : '90';
-              fullText += `\n> 🔍 *Fetching ${ticker} ${type} (DTE ${dteMin}–${dteMax})...*\n\n`;
+              // Store structured data — rendered as a card, not markdown text
+              toolCallsAccum.push({
+                name:  parsed.tool_call.name,
+                input: {
+                  // get_option_chain fields
+                  ticker:      inp.ticker      ? String(inp.ticker).toUpperCase() : undefined,
+                  type:        inp.type        ? String(inp.type)                 : undefined,
+                  dte_min:     inp.dte_min     != null ? Number(inp.dte_min)      : undefined,
+                  dte_max:     inp.dte_max     != null ? Number(inp.dte_max)      : undefined,
+                  otm_only:    inp.otm_only    != null ? Boolean(inp.otm_only)    : undefined,
+                  max_results: inp.max_results != null ? Number(inp.max_results)  : undefined,
+                  delta_min:   inp.delta_min   != null ? Number(inp.delta_min)    : undefined,
+                  delta_max:   inp.delta_max   != null ? Number(inp.delta_max)    : undefined,
+                  strike_min:  inp.strike_min  != null ? Number(inp.strike_min)   : undefined,
+                  strike_max:  inp.strike_max  != null ? Number(inp.strike_max)   : undefined,
+                  price_min:   inp.price_min   != null ? Number(inp.price_min)    : undefined,
+                  price_max:   inp.price_max   != null ? Number(inp.price_max)    : undefined,
+                  // get_option_price fields
+                  strike:      inp.strike      != null ? Number(inp.strike)       : undefined,
+                  expiration:  inp.expiration  ? String(inp.expiration)           : undefined,
+                },
+              });
+              // Show a lightweight in-progress indicator during streaming
+              setMessages(prev => prev.map(m => m.id === assistantId
+                ? { ...m, toolCalls: [...toolCallsAccum], streaming: true }
+                : m
+              ));
             }
 
             // During streaming, hide any partial/complete suggestion blocks
@@ -205,6 +228,7 @@ export function Chat({ provider, model, providerKeys, holdings, strategy, active
                 content: clean,
                 streaming: false,
                 optionSuggestions: suggestions.length > 0 ? suggestions : undefined,
+                toolCalls: toolCallsAccum.length > 0 ? toolCallsAccum : undefined,
               }
             : m
         )

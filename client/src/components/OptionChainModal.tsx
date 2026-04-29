@@ -292,17 +292,12 @@ function buildHighlightKeys(suggestions: OptionSuggestion[]): Set<string> {
   return keys;
 }
 
-// Convert suggestion expiration (YYYY-MM-DD) to unix timestamp matching expiry dates.
-// Must match the server's toUnix convention: noon UTC.
-function suggestionToUnix(expiration: string): number {
-  return new Date(expiration + 'T12:00:00Z').getTime() / 1000;
-}
 
 export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, ownedKeys, watchedKeys, highlights, initialExpiry }: Props) {
   const trackedOwned   = ownedKeys   ?? new Set<string>();
   const trackedWatched = watchedKeys ?? new Set<string>();
   const highlightedKeys = React.useMemo(() => buildHighlightKeys(highlights ?? []), [highlights]);
-  const { loading, loadingExpiries, error, expiryDates, groups, filters, setFilters, toggleExpiry, underlyingPrice } = useOptionChain(ticker);
+  const { loading, loadingExpiries, error, allExpiries, expiryDates, groups, filters, setFilters, toggleExpiry, selectExpiries, underlyingPrice } = useOptionChain(ticker);
 
   const price = underlyingPrice || currentPrice;
   const [view, setView] = useState<'calls' | 'puts' | 'both'>('calls');
@@ -312,10 +307,12 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
 
   useEffect(() => { if (watchForm) targetRef.current?.focus(); }, [watchForm?.contract.contractSymbol]);
 
-  // Auto-select expiry dates matching highlighted suggestions
+  // Auto-select expiry dates matching highlighted suggestions.
+  // Uses allExpiries (unfiltered) so we can match even if the expiry is outside
+  // the current DTE filter, and selectExpiries to *replace* the auto-selected
+  // first expiry rather than just adding to it.
   useEffect(() => {
-    if (!highlights || highlights.length === 0 || expiryDates.length === 0) return;
-    // Only apply once per set of highlights
+    if (!highlights || highlights.length === 0 || allExpiries.length === 0) return;
     const key = highlights.map(h => `${h.ticker}${h.strike}${h.expiration}`).join(',');
     if (highlightAppliedRef.current === key) return;
     highlightAppliedRef.current = key;
@@ -326,31 +323,26 @@ export function OptionChainModal({ ticker, currentPrice, onClose, onWatchAdded, 
     else if (types.has('put')) setView('puts');
     else setView('calls');
 
-    // Find matching expiry timestamps and toggle them on
-    const targetTimestamps = new Set(highlights.map(h => suggestionToUnix(h.expiration)));
-    for (const ts of expiryDates) {
-      // Match within a 24-hour window to handle timezone differences
-      const matches = [...targetTimestamps].some(target => Math.abs(ts - target) < 3600);
-      if (matches && !filters.selectedExpiries.includes(ts)) {
-        toggleExpiry(ts);
-      }
-    }
-  }, [highlights, expiryDates, filters.selectedExpiries, toggleExpiry]);
+    // Match by ISO date string — no timezone arithmetic needed
+    const targetDates = new Set(highlights.map(h => h.expiration));
+    const matching = allExpiries.filter(ts =>
+      targetDates.has(new Date(ts * 1000).toISOString().slice(0, 10))
+    );
+    if (matching.length > 0) selectExpiries(matching);
+  }, [highlights, allExpiries, selectExpiries]);
 
   // Auto-select expiry matching initialExpiry (e.g. clicked from options grid)
   const initialExpiryAppliedRef = useRef<string>('');
   useEffect(() => {
-    if (!initialExpiry || expiryDates.length === 0) return;
+    if (!initialExpiry || allExpiries.length === 0) return;
     if (initialExpiryAppliedRef.current === initialExpiry) return;
     initialExpiryAppliedRef.current = initialExpiry;
 
-    const target = suggestionToUnix(initialExpiry);
-    for (const ts of expiryDates) {
-      if (Math.abs(ts - target) < 3600 && !filters.selectedExpiries.includes(ts)) {
-        toggleExpiry(ts);
-      }
-    }
-  }, [initialExpiry, expiryDates, filters.selectedExpiries, toggleExpiry]);
+    const matching = allExpiries.filter(ts =>
+      new Date(ts * 1000).toISOString().slice(0, 10) === initialExpiry
+    );
+    if (matching.length > 0) selectExpiries(matching);
+  }, [initialExpiry, allExpiries, selectExpiries]);
 
   function set<K extends keyof typeof filters>(key: K, val: typeof filters[K]) {
     setFilters(f => ({ ...f, [key]: val }));

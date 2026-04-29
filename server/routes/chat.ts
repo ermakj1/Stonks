@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { streamChat, type AIProvider, type ChatMessage, type ToolExecutor } from '../services/ai.js';
 import { getAllPrices, type StockQuote, type OptionsData } from '../services/yahoo.js';
-import { getFilteredChain, getOptionMid } from '../services/cboe.js';
+import { getFilteredChain, getOptionMid, getOptionDetail } from '../services/cboe.js';
 import { getActiveAccountId, readAccount, buildOpenPositions, type Trade } from '../services/accounts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -242,6 +242,13 @@ ${holdingsSection}
 ${openPositionsSection}
 ${historySection}
 
+## OPTION CHAIN — NEVER GIVE UP
+When you call get_option_chain and the returned contracts don't include your target strike or delta zone:
+- ALWAYS make a second call with a narrower DTE window (±5 days around the target expiry) and/or add delta_min/delta_max
+- NEVER tell the user "I need more data", "the chain didn't include that strike", or "I can't find" a contract without first making at least one follow-up call
+- A wide DTE range (20–90 days) splits results across many expiries — narrow it to get more strikes per date
+- Example: wanted Jun 20 expiry at 0.20Δ but didn't see it → re-call with dte_min=50 dte_max=58 delta_min=0.15 delta_max=0.25
+
 ## CRITICAL RULE — YOU MUST FOLLOW THIS EVERY TIME
 Any time your response names a specific option contract (ticker + strike + expiration), you MUST output an OPTION_SUGGESTION block at the very end of your response. No exceptions. This is how the UI renders "Add to Watchlist" buttons for the user. If you skip this block, the user has no way to act on your recommendation.
 
@@ -282,6 +289,39 @@ IMPORTANT for holdings updates: preserve the exact schema format (stocks as an o
 
 function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
   return async (name, input) => {
+    // ── get_option_price ─────────────────────────────────────────────
+    if (name === 'get_option_price') {
+      const ticker     = String(input.ticker     ?? '').toUpperCase();
+      const type       = String(input.type       ?? '').toLowerCase();
+      const strike     = Number(input.strike     ?? 0);
+      const expiration = String(input.expiration ?? '');
+
+      if (!ticker || !type || !strike || !expiration) {
+        return 'Error: ticker, type, strike, and expiration are all required.';
+      }
+      if (type !== 'call' && type !== 'put') {
+        return 'Error: type must be "call" or "put".';
+      }
+
+      try {
+        const detail = await getOptionDetail(ticker, type, strike, expiration);
+        if (!detail) {
+          return `${ticker} ${type.toUpperCase()} $${strike} exp ${expiration} — not found in CBOE chain. ` +
+            `The contract may not exist, have no market, or the expiration date may be wrong. ` +
+            `Use get_option_chain to browse available strikes and confirm the exact expiry.`;
+        }
+        const spot = detail.underlyingClose;
+        return [
+          `${ticker} ${type.toUpperCase()} $${strike} exp ${expiration} (${detail.dte} DTE)` +
+            (spot ? `  |  underlying: $${spot.toFixed(2)}` : ''),
+          `  Bid: $${detail.bid.toFixed(2)}   Ask: $${detail.ask.toFixed(2)}   Mid: $${detail.mid.toFixed(2)}   Last: $${detail.last.toFixed(2)}`,
+          `  IV: ${(detail.iv * 100).toFixed(1)}%   Delta: ${detail.delta.toFixed(3)}   Volume: ${detail.volume.toLocaleString()}   OI: ${detail.openInterest.toLocaleString()}`,
+        ].join('\n');
+      } catch (err) {
+        return `Error fetching ${ticker} ${type} $${strike} ${expiration}: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+
     if (name !== 'get_option_chain') return `Unknown tool: ${name}`;
 
     const ticker = String(input.ticker ?? '').toUpperCase();
@@ -295,13 +335,20 @@ function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
     const dteMin     = Number(input.dte_min     ?? 20);
     const dteMax     = Number(input.dte_max     ?? 90);
     const otmOnly    = input.otm_only !== false;
-    const maxResults = Math.min(Number(input.max_results ?? 40), 120);
+    const maxResults = Math.min(Number(input.max_results ?? 100), 120);
+    const deltaMin   = input.delta_min  != null ? Number(input.delta_min)  : undefined;
+    const deltaMax   = input.delta_max  != null ? Number(input.delta_max)  : undefined;
+    const strikeMin  = input.strike_min != null ? Number(input.strike_min) : undefined;
+    const strikeMax  = input.strike_max != null ? Number(input.strike_max) : undefined;
+    const priceMin   = input.price_min  != null ? Number(input.price_min)  : undefined;
+    const priceMax   = input.price_max  != null ? Number(input.price_max)  : undefined;
 
     const underlyingPrice = priceMap.get(ticker)?.price;
 
     try {
       const contracts = await getFilteredChain(ticker, {
         type, dteMin, dteMax, otmOnly, maxResults, underlyingPrice,
+        deltaMin, deltaMax, strikeMin, strikeMax, priceMin, priceMax,
       });
 
       if (contracts.length === 0) {
@@ -311,7 +358,11 @@ function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
       const p = (s: string, n: number) => s.padStart(n);
       const header = [
         `${ticker} options  |  underlying: $${underlyingPrice?.toFixed(2) ?? 'N/A'}`,
-        `Filters: ${type}, DTE ${dteMin}–${dteMax} days, OTM only: ${otmOnly}  |  ${contracts.length} contracts`,
+        `Filters: ${type}, DTE ${dteMin}–${dteMax} days, OTM only: ${otmOnly}` +
+        (deltaMin != null || deltaMax != null ? `, delta ${deltaMin ?? 0}–${deltaMax ?? 1}` : '') +
+        (strikeMin != null || strikeMax != null ? `, strike $${strikeMin ?? 0}–$${strikeMax ?? '∞'}` : '') +
+        (priceMin != null || priceMax != null ? `, mid $${priceMin ?? 0}–$${priceMax ?? '∞'}` : '') +
+        `  |  ${contracts.length} contracts`,
         '',
         `${'Expiry'.padEnd(12)} ${'DTE'.padStart(3)}  ${'Type'.padEnd(4)}  ${'Strike'.padStart(7)}  ${'Bid'.padStart(6)}  ${'Ask'.padStart(6)}  ${'Mid'.padStart(6)}  ${'IV%'.padStart(5)}  ${'Delta'.padStart(6)}  ${'Vol'.padStart(7)}  ${'OI'.padStart(7)}`,
         '─'.repeat(90),
@@ -330,6 +381,119 @@ function makeToolExecutor(priceMap: Map<string, StockQuote>): ToolExecutor {
     }
   };
 }
+
+// GET /api/chat/price — preview the exact data the AI get_option_price tool returns
+chatRouter.get('/price', async (req, res) => {
+  try {
+    const { ticker: rawTicker = '', type: rawType = '', strike: rawStrike = '', expiration = '' } = req.query as Record<string, string>;
+    const ticker = rawTicker.toUpperCase().trim();
+    const type   = rawType.toLowerCase().trim();
+    const strike = Number(rawStrike);
+
+    if (!ticker || !type || !strike || !expiration) {
+      res.status(400).json({ error: 'ticker, type, strike, and expiration are required' });
+      return;
+    }
+    if (type !== 'call' && type !== 'put') {
+      res.status(400).json({ error: 'type must be "call" or "put"' });
+      return;
+    }
+
+    const detail = await getOptionDetail(ticker, type, strike, expiration);
+    res.json({ detail, found: detail !== null });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// GET /api/chat/chain — preview the exact data the AI get_option_chain tool returns
+chatRouter.get('/chain', async (req, res) => {
+  try {
+    const {
+      ticker:      rawTicker    = '',
+      type:        rawType      = 'calls',
+      dte_min:     rawDteMin    = '20',
+      dte_max:     rawDteMax    = '90',
+      otm_only:    rawOtmOnly   = 'true',
+      max_results: rawMax       = '100',
+      delta_min:   rawDeltaMin  = '',
+      delta_max:   rawDeltaMax  = '',
+      strike_min:  rawStrikeMin = '',
+      strike_max:  rawStrikeMax = '',
+      price_min:   rawPriceMin  = '',
+      price_max:   rawPriceMax  = '',
+    } = req.query as Record<string, string>;
+
+    const ticker = rawTicker.toUpperCase().trim();
+    if (!ticker) { res.status(400).json({ error: 'ticker is required' }); return; }
+
+    const type       = (rawType === 'puts' ? 'puts' : rawType === 'both' ? 'both' : 'calls') as 'calls' | 'puts' | 'both';
+    const dteMin     = Number(rawDteMin)  || 20;
+    const dteMax     = Number(rawDteMax)  || 90;
+    const otmOnly    = rawOtmOnly !== 'false';
+    const maxResults = Math.min(Number(rawMax) || 100, 120);
+    const deltaMin   = rawDeltaMin  !== '' ? Number(rawDeltaMin)  : undefined;
+    const deltaMax   = rawDeltaMax  !== '' ? Number(rawDeltaMax)  : undefined;
+    const strikeMin  = rawStrikeMin !== '' ? Number(rawStrikeMin) : undefined;
+    const strikeMax  = rawStrikeMax !== '' ? Number(rawStrikeMax) : undefined;
+    const priceMin   = rawPriceMin  !== '' ? Number(rawPriceMin)  : undefined;
+    const priceMax   = rawPriceMax  !== '' ? Number(rawPriceMax)  : undefined;
+
+    // Fetch underlying price from Yahoo
+    let underlyingPrice: number | undefined;
+    try {
+      const chartRes = await fetch(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`,
+        { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } }
+      );
+      if (chartRes.ok) {
+        const chartJson = await chartRes.json() as { chart?: { result?: Array<{ meta?: { regularMarketPrice?: number } }> } };
+        underlyingPrice = chartJson?.chart?.result?.[0]?.meta?.regularMarketPrice;
+      }
+    } catch { /* leave undefined */ }
+
+    const contracts = await getFilteredChain(ticker, {
+      type, dteMin, dteMax, otmOnly, maxResults, underlyingPrice,
+      deltaMin, deltaMax, strikeMin, strikeMax, priceMin, priceMax,
+    });
+
+    // Build the same formatted text the AI sees
+    let formattedText: string;
+    if (contracts.length === 0) {
+      formattedText = `No ${ticker} options matched (${type}, DTE ${dteMin}–${dteMax}, OTM: ${otmOnly}). Try widening filters or check the ticker.`;
+    } else {
+      const p = (s: string, n: number) => s.padStart(n);
+      const header = [
+        `${ticker} options  |  underlying: $${underlyingPrice?.toFixed(2) ?? 'N/A'}`,
+        `Filters: ${type}, DTE ${dteMin}–${dteMax} days, OTM only: ${otmOnly}` +
+        (deltaMin != null || deltaMax != null ? `, delta ${deltaMin ?? 0}–${deltaMax ?? 1}` : '') +
+        (strikeMin != null || strikeMax != null ? `, strike $${strikeMin ?? 0}–$${strikeMax ?? '∞'}` : '') +
+        (priceMin != null || priceMax != null ? `, mid $${priceMin ?? 0}–$${priceMax ?? '∞'}` : '') +
+        `  |  ${contracts.length} contracts`,
+        '',
+        `${'Expiry'.padEnd(12)} ${'DTE'.padStart(3)}  ${'Type'.padEnd(4)}  ${'Strike'.padStart(7)}  ${'Bid'.padStart(6)}  ${'Ask'.padStart(6)}  ${'Mid'.padStart(6)}  ${'IV%'.padStart(5)}  ${'Delta'.padStart(6)}  ${'Vol'.padStart(7)}  ${'OI'.padStart(7)}`,
+        '─'.repeat(90),
+      ].join('\n');
+      const rows = contracts.map(c =>
+        `${c.expiry.padEnd(12)} ${p(String(c.dte), 3)}  ${c.type.toUpperCase().padEnd(4)}  ${p('$' + c.strike, 7)}` +
+        `  ${p('$' + c.bid.toFixed(2), 6)}  ${p('$' + c.ask.toFixed(2), 6)}  ${p('$' + c.mid.toFixed(2), 6)}` +
+        `  ${p((c.iv * 100).toFixed(1) + '%', 5)}  ${p(c.delta.toFixed(3), 6)}` +
+        `  ${p((c.volume ?? 0).toLocaleString(), 7)}  ${p((c.openInterest ?? 0).toLocaleString(), 7)}`
+      );
+      formattedText = `${header}\n${rows.join('\n')}`;
+    }
+
+    res.json({
+      contracts,
+      formattedText,
+      underlyingPrice: underlyingPrice ?? null,
+      params: { ticker, type, dteMin, dteMax, otmOnly, maxResults, deltaMin, deltaMax, strikeMin, strikeMax, priceMin, priceMax },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
 
 // GET /api/chat/context — returns exactly what the AI would receive
 chatRouter.get('/context', async (_req, res) => {

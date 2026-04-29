@@ -35,18 +35,31 @@ function parseOCC(symbol: string) {
   };
 }
 
+interface CacheEntry {
+  ts:      number;
+  options: RawOption[];
+  close:   number | null;   // underlying last/close from CBOE response
+}
+
 export async function fetchChain(ticker: string): Promise<RawOption[]> {
-  const hit = cache.get(ticker);
-  if (hit && Date.now() - hit.ts < TTL_MS) return hit.options;
+  return (await fetchChainFull(ticker)).options;
+}
+
+/** Returns both options and the underlying close price from CBOE. */
+export async function fetchChainFull(ticker: string): Promise<{ options: RawOption[]; underlyingClose: number | null }> {
+  const hit = cache.get(ticker) as CacheEntry | undefined;
+  if (hit && Date.now() - hit.ts < TTL_MS) return { options: hit.options, underlyingClose: hit.close };
 
   const r = await fetch(`${CBOE_BASE}/${ticker}.json`, {
     headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
   });
   if (!r.ok) throw new Error(`CBOE HTTP ${r.status}`);
-  const data = await r.json() as { data: { options: RawOption[] } };
+  const data = await r.json() as { data: { options: RawOption[]; close?: number; bid?: number; ask?: number } };
   const options = data.data.options ?? [];
-  cache.set(ticker, { ts: Date.now(), options });
-  return options;
+  // CBOE includes the underlying's last trade price as data.data.close
+  const close   = data.data.close ?? null;
+  (cache as Map<string, CacheEntry>).set(ticker, { ts: Date.now(), options, close });
+  return { options, underlyingClose: close };
 }
 
 /**
@@ -71,6 +84,56 @@ export async function getOptionMid(
     const ask  = match.ask              ?? 0;
     const last = match.last_trade_price ?? match.prev_day_close ?? 0;
     return { bid, ask, mid: (bid + ask) / 2, last, iv: match.iv ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
+export interface OptionDetail extends OptionMid {
+  ticker:          string;
+  type:            'call' | 'put';
+  strike:          number;
+  expiry:          string;   // YYYY-MM-DD
+  dte:             number;
+  delta:           number;
+  volume:          number;
+  openInterest:    number;
+  underlyingClose: number | null;
+}
+
+/**
+ * Full detail lookup for a single specific contract.
+ * Returns null if the contract isn't found in the CBOE chain.
+ */
+export async function getOptionDetail(
+  ticker: string,
+  type: string,
+  strike: number,
+  expiry: string   // YYYY-MM-DD
+): Promise<OptionDetail | null> {
+  try {
+    const { options, underlyingClose } = await fetchChainFull(ticker);
+    const norm = type.toLowerCase() as 'call' | 'put';
+    const match = options.find(o => {
+      const p = parseOCC(o.option);
+      return p && p.expiry === expiry && p.type === norm && Math.abs(p.strike - strike) < 0.005;
+    });
+    if (!match) return null;
+    const bid   = match.bid              ?? 0;
+    const ask   = match.ask              ?? 0;
+    const last  = match.last_trade_price ?? match.prev_day_close ?? 0;
+    const dte   = Math.round(
+      (new Date(expiry + 'T12:00:00Z').getTime() - Date.now()) / 86_400_000
+    );
+    return {
+      ticker, type: norm, strike, expiry, dte,
+      bid, ask, mid: (bid + ask) / 2, last,
+      iv:           match.iv           ?? 0,
+      delta:        match.delta        ?? 0,
+      volume:       match.volume       ?? 0,
+      openInterest: match.open_interest ?? 0,
+      underlyingClose,
+    };
   } catch {
     return null;
   }
@@ -143,12 +206,19 @@ export function calcIV30(options: RawOption[], underlyingPrice: number): number 
 // ── Filtered chain for AI tool use ───────────────────────────────────
 
 export interface ChainFilter {
-  type?:           'calls' | 'puts' | 'both';
-  dteMin?:         number;   // default 20
-  dteMax?:         number;   // default 90
-  otmOnly?:        boolean;  // default true
-  maxResults?:     number;   // default 40, capped at 80
+  type?:            'calls' | 'puts' | 'both';
+  dteMin?:          number;   // default 20
+  dteMax?:          number;   // default 90
+  otmOnly?:         boolean;  // default true
+  maxResults?:      number;   // default 100, capped at 120
   underlyingPrice?: number;
+  // Pre-cap filters — applied before the maxResults slot allocation
+  deltaMin?:        number;   // absolute delta, e.g. 0.10 (applies to both calls and puts)
+  deltaMax?:        number;   // absolute delta, e.g. 0.40
+  strikeMin?:       number;   // minimum strike price
+  strikeMax?:       number;   // maximum strike price
+  priceMin?:        number;   // minimum mid price (option premium)
+  priceMax?:        number;   // maximum mid price (option premium)
 }
 
 export interface FilteredContract {
@@ -174,12 +244,20 @@ export async function getFilteredChain(
     dteMin      = 20,
     dteMax      = 90,
     otmOnly     = true,
-    maxResults  = 25,
+    maxResults  = 100,
     underlyingPrice,
+    deltaMin,
+    deltaMax,
+    strikeMin,
+    strikeMax,
+    priceMin,
+    priceMax,
   } = filter;
 
-  const options = await fetchChain(ticker);
-  const now     = Date.now() / 1000;
+  const { options, underlyingClose } = await fetchChainFull(ticker);
+  // Prefer caller-supplied underlying price; fall back to CBOE's close price
+  const spotPrice = underlyingPrice ?? underlyingClose ?? undefined;
+  const now       = Date.now() / 1000;
   const results: FilteredContract[] = [];
 
   for (const opt of options) {
@@ -195,17 +273,26 @@ export async function getFilteredChain(
     const dte      = (expiryTs - now) / 86400;
     if (dte < dteMin || dte > dteMax) continue;
 
-    // OTM filter
-    if (otmOnly && underlyingPrice != null) {
+    // OTM filter — uses spotPrice (caller-supplied or CBOE close) so this always works
+    if (otmOnly && spotPrice != null) {
       const isOTM = parsed.type === 'call'
-        ? parsed.strike > underlyingPrice
-        : parsed.strike < underlyingPrice;
+        ? parsed.strike > spotPrice
+        : parsed.strike < spotPrice;
       if (!isOTM) continue;
     }
 
     // Require non-zero mid (some stale contracts have no market)
     const mid = (opt.bid + opt.ask) / 2;
     if (mid <= 0) continue;
+
+    // Pre-cap filters — applied before slot allocation so they don't waste maxResults budget
+    const absDelta = Math.abs(opt.delta ?? 0);
+    if (deltaMin != null && absDelta < deltaMin) continue;
+    if (deltaMax != null && absDelta > deltaMax) continue;
+    if (strikeMin != null && parsed.strike < strikeMin) continue;
+    if (strikeMax != null && parsed.strike > strikeMax) continue;
+    if (priceMin  != null && mid < priceMin) continue;
+    if (priceMax  != null && mid > priceMax) continue;
 
     results.push({
       type:         parsed.type,
@@ -252,8 +339,8 @@ export async function getFilteredChain(
       }
     } else {
       bucket.sort((a, b) =>
-        underlyingPrice != null
-          ? Math.abs(a.strike - underlyingPrice) - Math.abs(b.strike - underlyingPrice)
+        spotPrice != null
+          ? Math.abs(a.strike - spotPrice) - Math.abs(b.strike - spotPrice)
           : a.strike - b.strike
       );
       balanced.push(...bucket.slice(0, perExpiry));
@@ -266,5 +353,18 @@ export async function getFilteredChain(
     return a.strike - b.strike;
   });
 
-  return balanced.slice(0, cap);
+  // If balanced fits within cap, return as-is
+  if (balanced.length <= cap) return balanced;
+
+  // Proportional trim: distribute cap evenly across all expiries so later
+  // expiries don't get cut off entirely by a simple head-slice.
+  const expiriesPresent = [...new Set(balanced.map(c => c.expiry))];
+  const trimPerExpiry   = Math.max(2, Math.floor(cap / expiriesPresent.length));
+  const seen = new Map<string, number>();
+  const out: FilteredContract[] = [];
+  for (const c of balanced) {
+    const n = seen.get(c.expiry) ?? 0;
+    if (n < trimPerExpiry) { out.push(c); seen.set(c.expiry, n + 1); }
+  }
+  return out;
 }

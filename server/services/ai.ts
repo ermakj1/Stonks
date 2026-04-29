@@ -19,46 +19,108 @@ const getGeminiClient    = () => new GoogleGenerativeAI(process.env.GEMINI_API_K
 const TOOL_DESCRIPTION = `Fetch a filtered options chain for a stock ticker. Use this when the user asks about options trades, wants to find contracts, or when you need current option prices to make a recommendation.
 
 Returns contracts with: strike, expiry, DTE, bid/ask/mid price, IV%, delta, volume, and open interest.
-Rules:
-- Always set type to "calls" OR "puts" — never omit it. Calls and puts are fetched separately.
-- Raise max_results to 60-80 when hunting a specific strike or delta zone to ensure the full range is returned.
-- Use otm_only=true (default) for covered calls / CSPs; set otm_only=false if you need ATM or ITM strikes.
-- Widen dte_max if the target expiry falls outside the default 90-day window.`;
 
-const ANTHROPIC_TOOLS: Anthropic.Tool[] = [{
-  name: 'get_option_chain',
-  description: TOOL_DESCRIPTION,
-  input_schema: {
-    type: 'object' as const,
-    properties: {
-      ticker:      { type: 'string',  description: 'Stock ticker e.g. AAPL, MSFT' },
-      type:        { type: 'string',  description: 'Option type: "calls" or "puts". Always specify — never omit. Use "calls" for covered calls / bullish plays, "puts" for cash-secured puts / bearish plays.' },
-      dte_min:     { type: 'number',  description: 'Min days to expiration. Default: 20' },
-      dte_max:     { type: 'number',  description: 'Max days to expiration. Default: 90' },
-      otm_only:    { type: 'boolean', description: 'Only return out-of-the-money options. Default: true' },
-      max_results: { type: 'number',  description: 'Max contracts to return. Default: 40, max: 120. Use 60-80 when hunting a specific strike or delta zone.' },
-    },
-    required: ['ticker', 'type'],
-  },
-}];
+HOW TO GET THE RIGHT STRIKES — READ THIS CAREFULLY:
 
-const GEMINI_TOOLS = [{
-  functionDeclarations: [{
+1. NARROW THE DTE WINDOW around your target expiry. The results are split equally across all expiries in the window. With dte_min=20 dte_max=90 you might have 12+ expiries, each getting only ~8 strikes. If you want the Jun 20 expiry (~54 DTE), use dte_min=50 dte_max=58 — all 100 results go to that one date.
+
+2. ALWAYS USE delta_min/delta_max when you have a delta target. These filters apply BEFORE the max_results cap, so you never waste slots on strikes outside your zone. For a 0.15–0.30Δ covered call: delta_min=0.15 delta_max=0.30.
+
+3. otm_only=true IS THE DEFAULT and is almost always correct. For covered calls, CSPs, and most selling strategies, every interesting strike is OTM. Only set otm_only=false if you explicitly need ITM or ATM contracts.
+
+4. IF YOU DON'T GET THE STRIKE YOU NEED: call again with a narrower DTE window (±5 days around the target expiry) and/or add a delta_min/delta_max range. Never tell the user you can't find a strike without making at least one follow-up call with tighter parameters.
+
+5. Use price_min/price_max to filter by option mid (premium budget). Use strike_min/strike_max when you know the exact price range you want.`;
+
+const PRICE_TOOL_DESCRIPTION = `Look up the current price and Greeks for one specific option contract you already know (ticker + type + strike + expiration).
+
+Use this when:
+- You know the exact contract and want its current bid/ask/mid/IV/delta
+- The user asks about a specific position they hold (e.g. "what is my MSFT $480 call worth?")
+- You want to verify a contract's price after recommending it
+
+Do NOT use this to browse or discover strikes — use get_option_chain for that.
+Returns: bid, ask, mid, last, IV%, delta, volume, open interest, DTE, and underlying price.
+Returns "not found" if the contract has no market or doesn't exist on CBOE.`;
+
+const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
+  {
     name: 'get_option_chain',
     description: TOOL_DESCRIPTION,
-    parameters: {
-      type: SchemaType.OBJECT,
+    input_schema: {
+      type: 'object' as const,
       properties: {
-        ticker:      { type: SchemaType.STRING,  description: 'Stock ticker e.g. AAPL, MSFT' },
-        type:        { type: SchemaType.STRING,  description: 'Option type: "calls" or "puts". Always specify — never omit.' },
-        dte_min:     { type: SchemaType.NUMBER,  description: 'Min days to expiration. Default: 20' },
-        dte_max:     { type: SchemaType.NUMBER,  description: 'Max days to expiration. Default: 90' },
-        otm_only:    { type: SchemaType.BOOLEAN, description: 'Only OTM options. Default: true' },
-        max_results: { type: SchemaType.NUMBER,  description: 'Max contracts. Default: 40, max: 120. Use 60-80 when hunting a specific strike or delta zone.' },
+        ticker:      { type: 'string',  description: 'Stock ticker e.g. AAPL, MSFT' },
+        type:        { type: 'string',  description: 'Option type: "calls" or "puts". Always specify — never omit. Use "calls" for covered calls / bullish plays, "puts" for cash-secured puts / bearish plays.' },
+        dte_min:     { type: 'number',  description: 'Min days to expiration. Default: 20' },
+        dte_max:     { type: 'number',  description: 'Max days to expiration. Default: 90' },
+        otm_only:    { type: 'boolean', description: 'Only return out-of-the-money options. Default: true' },
+        max_results: { type: 'number',  description: 'Max contracts to return. Default: 100, max: 120.' },
+        delta_min:   { type: 'number',  description: 'Min absolute delta (0–1). Applied before max_results cap. e.g. 0.10 to exclude near-zero delta contracts.' },
+        delta_max:   { type: 'number',  description: 'Max absolute delta (0–1). Applied before max_results cap. e.g. 0.35 to exclude deep ITM contracts.' },
+        strike_min:  { type: 'number',  description: 'Min strike price. Applied before max_results cap.' },
+        strike_max:  { type: 'number',  description: 'Max strike price. Applied before max_results cap.' },
+        price_min:   { type: 'number',  description: 'Min option mid price (premium). Applied before max_results cap. e.g. 0.50 to exclude illiquid contracts.' },
+        price_max:   { type: 'number',  description: 'Max option mid price (premium). Applied before max_results cap. e.g. 5.00 for budget-constrained strategies.' },
       },
       required: ['ticker', 'type'],
     },
-  }],
+  },
+  {
+    name: 'get_option_price',
+    description: PRICE_TOOL_DESCRIPTION,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        ticker:     { type: 'string', description: 'Stock ticker e.g. AAPL, MSFT' },
+        type:       { type: 'string', description: '"call" or "put"' },
+        strike:     { type: 'number', description: 'Strike price e.g. 480' },
+        expiration: { type: 'string', description: 'Expiration date in YYYY-MM-DD format e.g. 2026-05-15' },
+      },
+      required: ['ticker', 'type', 'strike', 'expiration'],
+    },
+  },
+];
+
+const GEMINI_TOOLS = [{
+  functionDeclarations: [
+    {
+      name: 'get_option_chain',
+      description: TOOL_DESCRIPTION,
+      parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+          ticker:      { type: SchemaType.STRING,  description: 'Stock ticker e.g. AAPL, MSFT' },
+          type:        { type: SchemaType.STRING,  description: 'Option type: "calls" or "puts". Always specify — never omit.' },
+          dte_min:     { type: SchemaType.NUMBER,  description: 'Min days to expiration. Default: 20' },
+          dte_max:     { type: SchemaType.NUMBER,  description: 'Max days to expiration. Default: 90' },
+          otm_only:    { type: SchemaType.BOOLEAN, description: 'Only OTM options. Default: true' },
+          max_results: { type: SchemaType.NUMBER,  description: 'Max contracts. Default: 100, max: 120.' },
+          delta_min:   { type: SchemaType.NUMBER,  description: 'Min absolute delta (0–1), applied before cap.' },
+          delta_max:   { type: SchemaType.NUMBER,  description: 'Max absolute delta (0–1), applied before cap.' },
+          strike_min:  { type: SchemaType.NUMBER,  description: 'Min strike price, applied before cap.' },
+          strike_max:  { type: SchemaType.NUMBER,  description: 'Max strike price, applied before cap.' },
+          price_min:   { type: SchemaType.NUMBER,  description: 'Min option mid price, applied before cap.' },
+          price_max:   { type: SchemaType.NUMBER,  description: 'Max option mid price, applied before cap.' },
+        },
+        required: ['ticker', 'type'],
+      },
+    },
+    {
+      name: 'get_option_price',
+      description: PRICE_TOOL_DESCRIPTION,
+      parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+          ticker:     { type: SchemaType.STRING, description: 'Stock ticker' },
+          type:       { type: SchemaType.STRING, description: '"call" or "put"' },
+          strike:     { type: SchemaType.NUMBER, description: 'Strike price' },
+          expiration: { type: SchemaType.STRING, description: 'Expiration date YYYY-MM-DD' },
+        },
+        required: ['ticker', 'type', 'strike', 'expiration'],
+      },
+    },
+  ],
 }];
 
 // ── SSE helper ────────────────────────────────────────────────────────

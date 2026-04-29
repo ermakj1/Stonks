@@ -103,12 +103,35 @@ export interface OptionSuggestion {
   notes?: string;
 }
 
+export interface ToolCallRecord {
+  name: string;  // "get_option_chain" | "get_option_price"
+  input: {
+    // get_option_chain
+    ticker?:      string;
+    type?:        string;
+    dte_min?:     number;
+    dte_max?:     number;
+    otm_only?:    boolean;
+    max_results?: number;
+    delta_min?:   number;
+    delta_max?:   number;
+    strike_min?:  number;
+    strike_max?:  number;
+    price_min?:   number;
+    price_max?:   number;
+    // get_option_price (exact lookup)
+    strike?:      number;
+    expiration?:  string;  // YYYY-MM-DD
+  };
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   streaming?: boolean;
   optionSuggestions?: OptionSuggestion[];
+  toolCalls?: ToolCallRecord[];
 }
 
 export interface OptionContract {

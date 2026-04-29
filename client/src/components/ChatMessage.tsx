@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Message, OptionSuggestion } from '../types';
+import type { Message, OptionSuggestion, ToolCallRecord } from '../types';
+import { ChainTable, type ChainResult } from './ChainTable';
 
 interface Props {
   message: Message;
@@ -13,6 +14,325 @@ function fmtExpiry(d: string) {
   const dt = new Date(d + 'T12:00:00Z');
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
 }
+
+// ── Tool call card (get_option_chain) ─────────────────────────────────────
+
+function ToolCallCard({ call }: { call: ToolCallRecord }) {
+  const [expanded,  setExpanded]  = useState(false);
+  const [loading,   setLoading]   = useState(false);
+  const [result,    setResult]    = useState<ChainResult | null>(null);
+  const [fetchErr,  setFetchErr]  = useState<string | null>(null);
+  const [view,      setView]      = useState<'table' | 'text'>('table');
+
+  const inp = call.input;
+  const ticker    = inp.ticker      ?? '?';
+  const type      = inp.type        ?? 'calls';
+  const dteMin    = inp.dte_min     ?? 20;
+  const dteMax    = inp.dte_max     ?? 90;
+  const otmOnly   = inp.otm_only    !== false;
+  const maxRes    = inp.max_results ?? 100;
+  const deltaMin  = inp.delta_min;
+  const deltaMax  = inp.delta_max;
+  const strikeMin = inp.strike_min;
+  const strikeMax = inp.strike_max;
+  const priceMin  = inp.price_min;
+  const priceMax  = inp.price_max;
+
+  const typeColor = type === 'puts' ? '#f87171' : '#34d399';
+
+  const fetch_ = useCallback(async () => {
+    if (result) { setExpanded(e => !e); return; }
+    setExpanded(true);
+    setLoading(true);
+    setFetchErr(null);
+    try {
+      const params = new URLSearchParams({
+        ticker, type, dte_min: String(dteMin), dte_max: String(dteMax),
+        otm_only: String(otmOnly), max_results: String(maxRes),
+        ...(deltaMin  != null ? { delta_min:  String(deltaMin)  } : {}),
+        ...(deltaMax  != null ? { delta_max:  String(deltaMax)  } : {}),
+        ...(strikeMin != null ? { strike_min: String(strikeMin) } : {}),
+        ...(strikeMax != null ? { strike_max: String(strikeMax) } : {}),
+        ...(priceMin  != null ? { price_min:  String(priceMin)  } : {}),
+        ...(priceMax  != null ? { price_max:  String(priceMax)  } : {}),
+      });
+      const res  = await fetch(`/api/chat/chain?${params}`);
+      const json = await res.json() as ChainResult & { error?: string };
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      setResult(json);
+    } catch (e) {
+      setFetchErr(e instanceof Error ? e.message : 'Failed to fetch');
+    } finally {
+      setLoading(false);
+    }
+  }, [result, ticker, type, dteMin, dteMax, otmOnly, maxRes, deltaMin, deltaMax, strikeMin, strikeMax, priceMin, priceMax]);
+
+  return (
+    <div style={{
+      border: '1px solid #1e3a5f',
+      borderRadius: 10,
+      background: '#0d1e30',
+      overflow: 'hidden',
+      fontSize: 12,
+    }}>
+      {/* ── pill row ── */}
+      <button
+        onClick={fetch_}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+          background: 'none', border: 'none', cursor: 'pointer',
+          padding: '7px 12px', textAlign: 'left',
+        }}
+      >
+        {/* icon */}
+        <span style={{ fontSize: 13, flexShrink: 0 }}>🔍</span>
+
+        {/* ticker + type */}
+        <span style={{ fontWeight: 800, color: '#e2e8f0', letterSpacing: '0.03em', fontSize: 12 }}>
+          {ticker}
+        </span>
+        <span style={{
+          fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+          background: type === 'puts' ? 'rgba(248,113,113,0.15)' : 'rgba(52,211,153,0.15)',
+          border: `1px solid ${type === 'puts' ? 'rgba(248,113,113,0.3)' : 'rgba(52,211,153,0.3)'}`,
+          color: typeColor, letterSpacing: '0.05em', textTransform: 'uppercase',
+        }}>
+          {type}
+        </span>
+
+        {/* param pills */}
+        <span style={{ color: '#475569', fontSize: 11 }}>DTE {dteMin}–{dteMax}</span>
+        {otmOnly && <span style={{ color: '#475569', fontSize: 11 }}>OTM</span>}
+        {(deltaMin != null || deltaMax != null) && (
+          <span style={{ color: '#a78bfa', fontSize: 11 }}>
+            Δ {deltaMin ?? '0'}–{deltaMax ?? '1'}
+          </span>
+        )}
+        {(strikeMin != null || strikeMax != null) && (
+          <span style={{ color: '#60a5fa', fontSize: 11 }}>
+            ${strikeMin ?? '0'}–${strikeMax ?? '∞'}
+          </span>
+        )}
+        {(priceMin != null || priceMax != null) && (
+          <span style={{ color: '#fbbf24', fontSize: 11 }}>
+            ${priceMin ?? '0'}–${priceMax ?? '∞'} mid
+          </span>
+        )}
+        <span style={{ color: '#334155', fontSize: 11 }}>max {maxRes}</span>
+
+        {/* right side: result count or loading */}
+        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          {loading && (
+            <span style={{ color: '#475569', fontSize: 11 }}>fetching…</span>
+          )}
+          {result && !loading && (
+            <span style={{ color: '#64748b', fontSize: 11 }}>
+              {result.contracts.length} contracts
+            </span>
+          )}
+          <span style={{ color: expanded ? '#34d399' : '#475569', fontSize: 13, lineHeight: 1 }}>
+            {expanded ? '▾' : '▸'}
+          </span>
+        </span>
+      </button>
+
+      {/* ── expanded body ── */}
+      {expanded && (
+        <div style={{ borderTop: '1px solid #1e3a5f', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {loading && (
+            <div style={{ color: '#475569', fontSize: 12, padding: '8px 0' }}>Loading chain…</div>
+          )}
+          {fetchErr && (
+            <div style={{ color: '#f87171', fontSize: 12, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, padding: '6px 10px' }}>
+              {fetchErr}
+            </div>
+          )}
+          {result && !loading && (
+            <>
+              {/* header row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 700 }}>
+                  {result.contracts.length === 0 ? 'No contracts matched' : `${result.contracts.length} contract${result.contracts.length !== 1 ? 's' : ''}`}
+                </span>
+                {result.underlyingPrice != null && (
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    · {result.params.ticker} @ ${result.underlyingPrice.toFixed(2)}
+                  </span>
+                )}
+                {/* view toggle */}
+                {result.contracts.length > 0 && (
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+                    {(['table', 'text'] as const).map(v => (
+                      <button
+                        key={v}
+                        onClick={() => setView(v)}
+                        style={{
+                          padding: '1px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700,
+                          cursor: 'pointer', transition: 'all 0.1s',
+                          border: view === v ? '1px solid #334155' : '1px solid transparent',
+                          background: view === v ? '#1e293b' : 'none',
+                          color: view === v ? '#e2e8f0' : '#475569',
+                        }}
+                      >
+                        {v === 'table' ? '⊞ Table' : '≡ Text'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {result.contracts.length === 0 && (
+                <div style={{ color: '#64748b', fontSize: 12 }}>{result.formattedText}</div>
+              )}
+              {result.contracts.length > 0 && view === 'table' && (
+                <ChainTable contracts={result.contracts} underlyingPrice={result.underlyingPrice} />
+              )}
+              {result.contracts.length > 0 && view === 'text' && (
+                <pre style={{
+                  background: '#0a0f1a', border: '1px solid #1e293b', borderRadius: 8,
+                  padding: '10px 12px', fontSize: 11, lineHeight: 1.55, color: '#94a3b8',
+                  fontFamily: "ui-monospace, monospace", overflowX: 'auto', overflowY: 'auto',
+                  maxHeight: 340, whiteSpace: 'pre', margin: 0,
+                }}>
+                  {result.formattedText}
+                </pre>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Price lookup card (get_option_price) ──────────────────────────────────
+
+interface OptionDetailResult {
+  found:   boolean;
+  detail?: {
+    ticker: string; type: string; strike: number; expiry: string; dte: number;
+    bid: number; ask: number; mid: number; last: number;
+    iv: number; delta: number; volume: number; openInterest: number;
+    underlyingClose: number | null;
+  };
+}
+
+function PriceCallCard({ call }: { call: ToolCallRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  const [loading,  setLoading]  = useState(false);
+  const [result,   setResult]   = useState<OptionDetailResult | null>(null);
+  const [err,      setErr]      = useState<string | null>(null);
+
+  const inp        = call.input;
+  const ticker     = (inp.ticker     ?? '?').toUpperCase();
+  const type       = inp.type        ?? '';
+  const strike     = inp.strike      ?? 0;
+  const expiration = inp.expiration  ?? '';
+  const isCall     = type === 'call';
+  const typeColor  = isCall ? '#34d399' : '#f87171';
+
+  const fmtExp = (s: string) => {
+    const d = new Date(s + 'T12:00:00Z');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  };
+
+  const fetch_ = useCallback(async () => {
+    if (result) { setExpanded(e => !e); return; }
+    setExpanded(true);
+    setLoading(true);
+    setErr(null);
+    try {
+      const params = new URLSearchParams({ ticker, type, strike: String(strike), expiration });
+      const res  = await fetch(`/api/chat/price?${params}`);
+      const json = await res.json() as OptionDetailResult & { error?: string };
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      setResult(json);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to fetch');
+    } finally {
+      setLoading(false);
+    }
+  }, [result, ticker, type, strike, expiration]);
+
+  const d = result?.detail;
+
+  return (
+    <div style={{ border: '1px solid #1e3a5f', borderRadius: 10, background: '#0d1e30', overflow: 'hidden', fontSize: 12 }}>
+      {/* pill row */}
+      <button
+        onClick={fetch_}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '7px 12px', textAlign: 'left' }}
+      >
+        <span style={{ fontSize: 13, flexShrink: 0 }}>💲</span>
+        <span style={{ fontWeight: 800, color: '#e2e8f0', letterSpacing: '0.03em', fontSize: 12 }}>{ticker}</span>
+        <span style={{
+          fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+          background: isCall ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)',
+          border: `1px solid ${isCall ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)'}`,
+          color: typeColor, letterSpacing: '0.05em', textTransform: 'uppercase',
+        }}>{type}</span>
+        <span style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 12 }}>${strike}</span>
+        <span style={{ color: '#475569', fontSize: 11 }}>{expiration ? fmtExp(expiration) : ''}</span>
+
+        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          {loading && <span style={{ color: '#475569', fontSize: 11 }}>fetching…</span>}
+          {d && !loading && (
+            <span style={{ color: '#64748b', fontSize: 11 }}>mid ${d.mid.toFixed(2)} · Δ {d.delta.toFixed(3)}</span>
+          )}
+          {result && !result.found && !loading && (
+            <span style={{ color: '#f87171', fontSize: 11 }}>not found</span>
+          )}
+          <span style={{ color: expanded ? '#34d399' : '#475569', fontSize: 13, lineHeight: 1 }}>
+            {expanded ? '▾' : '▸'}
+          </span>
+        </span>
+      </button>
+
+      {/* expanded body */}
+      {expanded && (
+        <div style={{ borderTop: '1px solid #1e3a5f', padding: '10px 12px' }}>
+          {loading && <div style={{ color: '#475569', fontSize: 12 }}>Loading…</div>}
+          {err && <div style={{ color: '#f87171', fontSize: 12 }}>{err}</div>}
+          {result && !result.found && !loading && (
+            <div style={{ color: '#64748b', fontSize: 12 }}>
+              Contract not found in CBOE chain. It may not exist or have no market.
+            </div>
+          )}
+          {d && !loading && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, auto)', gap: '6px 24px', width: 'fit-content' }}>
+              {[
+                ['Bid',    `$${d.bid.toFixed(2)}`],
+                ['Ask',    `$${d.ask.toFixed(2)}`],
+                ['Mid',    `$${d.mid.toFixed(2)}`],
+                ['Last',   `$${d.last.toFixed(2)}`],
+                ['IV',     `${(d.iv * 100).toFixed(1)}%`],
+                ['Delta',  d.delta.toFixed(3)],
+                ['Volume', d.volume.toLocaleString()],
+                ['OI',     d.openInterest.toLocaleString()],
+                ['DTE',    `${d.dte}d`],
+                ...(d.underlyingClose != null ? [['Underlying', `$${d.underlyingClose.toFixed(2)}`]] : []),
+              ].map(([label, value]) => (
+                <React.Fragment key={label}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+                  <span style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 600 }}>{value}</span>
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Dispatch tool call to the right card ──────────────────────────────────
+
+function ToolCallDispatch({ call }: { call: ToolCallRecord }) {
+  if (call.name === 'get_option_price') return <PriceCallCard call={call} />;
+  return <ToolCallCard call={call} />;
+}
+
+// ── Option suggestion card ─────────────────────────────────────────────────
 
 function OptionSuggestionCard({ suggestion, onWatch, onViewChain }: {
   suggestion: OptionSuggestion;
@@ -125,6 +445,14 @@ export function ChatMessage({ message, onWatchOption, onViewChain }: Props) {
             <Markdown remarkPlugins={[remarkGfm]}>{message.content || (message.streaming ? '▍' : '')}</Markdown>
           </div>
         </div>
+        {/* Tool call cards — shown while streaming and after */}
+        {message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mt-2 flex flex-col gap-1.5">
+            {message.toolCalls.map((call, i) => (
+              <ToolCallDispatch key={i} call={call} />
+            ))}
+          </div>
+        )}
         {message.streaming && (
           <div className="mt-1 ml-1 flex items-center gap-1.5">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />

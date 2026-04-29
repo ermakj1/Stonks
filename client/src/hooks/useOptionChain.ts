@@ -65,11 +65,13 @@ export interface UseOptionChainResult {
   loading:         boolean;
   loadingExpiries: Set<number>;
   error:           string | null;
+  allExpiries:     number[];   // unfiltered, for highlight matching
   expiryDates:     number[];
   groups:          ExpiryGroup[];
   filters:         OptionFilters;
   setFilters:      React.Dispatch<React.SetStateAction<OptionFilters>>;
   toggleExpiry:    (ts: number) => void;
+  selectExpiries:  (timestamps: number[]) => void;  // replace selection + fetch
   underlyingPrice: number;
 }
 
@@ -130,6 +132,14 @@ export function useOptionChain(ticker: string | null): UseOptionChainResult {
       fetchExpiry(ts);
       return { ...f, selectedExpiries: [...sel, ts].sort((a, b) => a - b) };
     });
+  }, [fetchExpiry]);
+
+  // ── replace selection (used by highlights to avoid stale first-expiry) ──
+  const selectExpiries = useCallback((timestamps: number[]) => {
+    timestamps.forEach(ts => {
+      if (!cacheRef.current.has(ts)) fetchExpiry(ts);
+    });
+    setFilters(f => ({ ...f, selectedExpiries: timestamps.slice().sort((a, b) => a - b) }));
   }, [fetchExpiry]);
 
   // ── initial load ──────────────────────────────────────────────────
@@ -238,5 +248,5 @@ export function useOptionChain(ticker: string | null): UseOptionChainResult {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, underlyingPrice, cacheTick]);
 
-  return { loading, loadingExpiries, error, expiryDates, groups, filters, setFilters, toggleExpiry, underlyingPrice };
+  return { loading, loadingExpiries, error, allExpiries, expiryDates, groups, filters, setFilters, toggleExpiry, selectExpiries, underlyingPrice };
 }
